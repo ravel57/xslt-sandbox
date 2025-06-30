@@ -1,0 +1,5 @@
+.comment  { -fx-fill: #6A9955; }
+.cdata    { -fx-fill: #606060; }
+.tag      { -fx-fill: #569CD6; }
+.attribute{ -fx-fill: #9CDCFE; }
+.value    { -fx-fill: #CE9178; }
