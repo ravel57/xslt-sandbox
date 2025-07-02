@@ -404,75 +404,6 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
-	private fun buildXPath(xml: String, offset: Int): String {
-		data class Frame(
-			val name: String,
-			var index: Int,
-			val attrs: Map<String, String>             //  ←  добавили
-		)
-
-		val stack = ArrayDeque<Frame>()
-		var i = 0
-		val openTag = Regex("""<([A-Za-z_][\w\-.]*)([^>]*)?>""")
-		val closeTag = Regex("""</([A-Za-z_][\w\-.]*)\s*>""")
-		val selfClose = Regex("""<([A-Za-z_][\w\-.]*)([^>]*)?/>""")
-		val attrRegex = Regex("""([\w:-]+)\s*=\s*(['"])(.*?)\2""")
-
-		fun path() = stack.joinToString("") { "/${it.name}[${it.index}]" }
-
-		while (i < xml.length) {
-			val lt = xml.indexOf('<', i)
-			if (lt < 0) break
-			if (offset in i until lt) return path()           // курсор на текстовом узле
-
-			var handled = false
-
-			fun attrsOf(tag: String): Map<String, String> =
-				attrRegex.findAll(tag).associate { it.groupValues[1] to it.groupValues[3] }
-
-			/* -------- <tag ...> -------- */
-			openTag.matchAt(xml, lt)?.also { m ->
-				val name = m.groupValues[1]
-				val gt = xml.indexOf('>', lt)
-				val attributes = attrsOf(xml.substring(lt, gt + 1))
-				val idx = stack.count { it.name == name } + 1
-				stack.addLast(Frame(name, idx, attributes))
-
-				if (offset in lt..gt) {                            // курсор внутри <tag …>
-					attrRegex.findAll(xml, lt).forEach { a ->
-						val s = lt + a.range.first
-						val e = lt + a.range.last
-						if (offset in s..e) return "${path()}/@${a.groupValues[1]}"
-					}
-					return path()
-				}
-
-				if (xml[gt - 1] == '/') stack.removeLast()        // self-closing
-				i = gt + 1; handled = true
-			}
-
-			/* -------- </tag> -------- */
-			if (!handled) closeTag.matchAt(xml, lt)?.also {
-				if (stack.isNotEmpty()) stack.removeLast()
-				i = xml.indexOf('>', lt).let { if (it < 0) xml.length else it + 1 }
-				handled = true
-			}
-
-			/* -------- <tag .../>  (с пробелом перед />) -------- */
-			if (!handled) selfClose.matchAt(xml, lt)?.also { m ->
-				val gt = xml.indexOf('>', lt)
-				val name = m.groupValues[1]
-				val idx = stack.count { it.name == name } + 1
-				if (offset in lt..gt) return "${path()}/$name[$idx]"
-				i = gt + 1; handled = true
-			}
-
-			if (!handled) i = lt + 1
-		}
-		return ""
-	}
-
-
 	private fun openXPathEditor(owner: Stage) {
 		if (currentArea !== xmlArea) return
 		val meta = buildXPathWithMeta(xmlArea.text, xmlArea.selection.start)
@@ -489,11 +420,11 @@ class XmlXsltValidatorApp : Application() {
 		/* строим строки выбора */
 		val rows = meta.segs.map { seg ->
 			val lbl = Label(seg.name)
-			val cb  = ChoiceBox<String>()
+			val cb = ChoiceBox<String>()
 			val choices = mutableListOf<String>()
 			choices += if (seg.predicate.isNotEmpty()) "по индексу ${seg.predicate}"
 			else "без предиката"
-			seg.attrs.forEach { (k,v) -> choices += "@$k='$v'" }
+			seg.attrs.forEach { (k, v) -> choices += "@$k='$v'" }
 			cb.items.addAll(choices); cb.value = choices[0]
 			HBox(6.0, lbl, cb)
 		}
@@ -505,8 +436,8 @@ class XmlXsltValidatorApp : Application() {
 		fun rebuild() {
 			val sb = StringBuilder()
 			rows.forEachIndexed { iRow, h ->
-				val name  = (h.children[0] as Label).text
-				val sel   = (h.children[1] as ChoiceBox<*>).value as String
+				val name = (h.children[0] as Label).text
+				val sel = (h.children[1] as ChoiceBox<*>).value as String
 				sb.append('/').append(name)
 				when {
 					sel.startsWith("@") -> sb.append("[$sel]")
@@ -516,11 +447,13 @@ class XmlXsltValidatorApp : Application() {
 			}
 			resultField.text = sb.toString()
 		}
-		rows.forEach { (it.children[1] as ChoiceBox<*>)
-			.valueProperty().addListener { _,_,_-> rebuild() } }
+		rows.forEach {
+			(it.children[1] as ChoiceBox<*>)
+				.valueProperty().addListener { _, _, _ -> rebuild() }
+		}
 
 		val okBtn = Button("Copy & Close")
-		val dlg   = Stage()
+		val dlg = Stage()
 		searchDialog = dlg                             // запомнили
 		okBtn.setOnAction {
 			val clip = javafx.scene.input.Clipboard.getSystemClipboard()
@@ -533,7 +466,8 @@ class XmlXsltValidatorApp : Application() {
 		dlg.apply {
 			initOwner(owner); initModality(Modality.WINDOW_MODAL)
 			title = "XPath editor"
-			scene = Scene(VBox(8.0,
+			scene = Scene(VBox(
+				8.0,
 				VBox(4.0, *rows.toTypedArray()),
 				resultField, okBtn
 			).apply { padding = Insets(12.0) })
@@ -542,83 +476,121 @@ class XmlXsltValidatorApp : Application() {
 		}
 	}
 
+
+	/**
+	 *  Строит абсолютный XPath до узла/атрибута под курсором
+	 *  и одновременно возвращает метаданные каждого сегмента
+	 *  (имя, исходный индекс-предикат, все найденные атрибуты).
+	 */
 	private fun buildXPathWithMeta(xml: String, offset: Int): XPathMeta {
-		data class Frame(val name: String, var idx: Int, val attrs: Map<String,String>)
-		val openTag   = Regex("""<([A-Za-z_][\w\-.]*)([^>/]*?)>""")
-		val closeTag  = Regex("""</([A-Za-z_][\w\-.]*)\s*>""")
-		val selfClose = Regex("""<([A-Za-z_][\w\-.]*)([^>/]*?)/>""")
-		val attrRx    = Regex("""([\w:-]+)\s*=\s*(['"])(.*?)\2""")
+		/* вспомогательная обёртка для стека разбора */
+		data class Frame(val name: String, var idx: Int, val attrs: Map<String, String>)
 
-		val stack = ArrayDeque<Frame>()
-		var i = 0
-		fun path() = stack.joinToString("") { "/${it.name}[${it.idx}]" }
+		/* шаблоны тегов и атрибутов */
+		val selfRx = Regex("""<([A-Za-z_][\w\-.]*)([^>]*)?/>""")     // <tag …/>
+		val openRx = Regex("""<([A-Za-z_][\w\-.]*)([^>]*)?>""")      // <tag …>
+		val closeRx = Regex("""</([A-Za-z_][\w\-.]*)\s*>""")          // </tag>
+		val attrRx = Regex("""([\w:-]+)\s*=\s*(['"])(.*?)\2""")      // name="value"
 
-		loop@ while (i < xml.length) {
+		fun attrsOf(tagText: String) =
+			attrRx.findAll(tagText).associate { it.groupValues[1] to it.groupValues[3] }
+
+		val stack = ArrayDeque<Frame>()            // открытые элементы
+		val segsMutable = mutableListOf<SegMeta>()       // метаданные для GUI
+		var i = 0                              // текущий индекс в xml
+		var resultPath: String? = null                   // итоговый путь
+
+		fun currentPath() = stack.joinToString("") { "/${it.name}[${it.idx}]" }
+
+		/* основной проход по xml до позиции курсора */
+		while (i < xml.length) {
 			val lt = xml.indexOf('<', i)
 			if (lt < 0) break
-			if (offset in i until lt) break
 
-			/* -------- пробуем self-closing -------- */
-			val mSelf = selfClose.matchAt(xml, lt)
-			if (mSelf != null) {
-				val name = mSelf.groupValues[1]
-				val attrs = attrRx.findAll(mSelf.value).associate { it.groupValues[1] to it.groupValues[3] }
-				val idx = stack.count { it.name == name } + 1
-				if (offset in lt..mSelf.range.last)
-					return XPathMeta("${path()}/$name[$idx]", emptyList())
-
-				i = mSelf.range.last + 1
-				continue
+			/* курсор находится в интервале «текст» → двигаемся к следующему '<' */
+			if (offset in i until lt) {
+				i = lt; continue
 			}
 
-			/* -------- пробуем открывающий -------- */
-			val mOpen = openTag.matchAt(xml, lt)
-			if (mOpen != null) {
-				val name = mOpen.groupValues[1]
-				val attrs = attrRx.findAll(mOpen.value).associate { it.groupValues[1] to it.groupValues[3] }
-				val idx = stack.count { it.name == name } + 1
-				stack.addLast(Frame(name, idx, attrs))
+			var handled = false
 
-				if (offset in lt..mOpen.range.last) {
-					// курсор внутри тега – возможно попали на атрибут
-					attrRx.findAll(mOpen.value).forEach { a ->
-						val s = lt + a.range.first
-						val e = lt + a.range.last
-						if (offset in s..e)
-							return XPathMeta("${path()}/@${a.groupValues[1]}", emptyList())
-					}
-					break
-				}
-				i = mOpen.range.last + 1
-				continue
+			/* ---------- <tag …/> ---------- */
+			selfRx.matchAt(xml, lt)?.also { m ->
+				val name = m.groupValues[1]
+				val idx = stack.count { it.name == name } + 1
+				val atts = attrsOf(m.value)
+
+				// фиксируем сегмент ДО снятия со стека
+				segsMutable += SegMeta(name, "[$idx]", atts)
+				stack.addLast(Frame(name, idx, atts))
+
+				// курсор оказался внутри этого тега
+				if (offset in lt..m.range.last) resultPath = currentPath()
+
+				stack.removeLast()              // self-closing → сразу закрыли
+				i = m.range.last + 1
+				handled = true
 			}
 
-			/* -------- пробуем закрывающий -------- */
-			val mClose = closeTag.matchAt(xml, lt)
-			if (mClose != null) {
+			/* ---------- <tag …> ----------- */
+			if (!handled) openRx.matchAt(xml, lt)?.also { m ->
+				val name = m.groupValues[1]
+				val idx = stack.count { it.name == name } + 1
+				val atts = attrsOf(m.value)
+
+				segsMutable += SegMeta(name, "[$idx]", atts)
+				stack.addLast(Frame(name, idx, atts))
+
+				if (offset in lt..m.range.last) resultPath = currentPath()
+
+				i = m.range.last + 1
+				handled = true
+			}
+
+			/* ---------- </tag> ------------ */
+			if (!handled) closeRx.matchAt(xml, lt)?.also { m ->
 				if (stack.isNotEmpty()) stack.removeLast()
-				i = mClose.range.last + 1
-				continue
+				i = m.range.last + 1
+				handled = true
 			}
 
-			i = lt + 1
+			/* ---------- любой прочий «<» -- */
+			if (!handled) i = lt + 1
+
+			if (resultPath != null) break
 		}
 
-		val segs = stack.map { SegMeta(it.name, "[${it.idx}]", it.attrs) }
-		return XPathMeta(path(), segs)
+		/* если курсор был на атрибуте – добавляем /@attr */
+		var attrPred = ""
+		if (resultPath == null && stack.isNotEmpty()) resultPath = currentPath()
+
+		if (stack.isNotEmpty()) {
+			val tagStart = xml.lastIndexOf('<', offset).coerceAtLeast(0)
+			val tagEnd = xml.indexOf('>', tagStart).coerceAtLeast(tagStart)
+			if (offset in tagStart..tagEnd) {
+				attrRx.findAll(xml.substring(tagStart, tagEnd + 1)).forEach { a ->
+					val s = tagStart + a.range.first
+					val e = tagStart + a.range.last
+					if (offset in s..e) attrPred = "/@${a.groupValues[1]}"
+				}
+			}
+		}
+
+		return XPathMeta(resultPath + attrPred, segsMutable)
 	}
 
-
-	private data class SegMeta(
-		val name: String,
-		val predicate: String,          // "[1]" или "" (если не было индекса)
-		val attrs: Map<String, String>  // все атрибуты у этого узла
+	data class SegMeta(
+		val name: String,          // имя элемента
+		val predicate: String,     // исходный индекс в виде "[n]"
+		val attrs: Map<String, String>  // найденные атрибуты
 	)
 
-	private data class XPathMeta(
-		val xpath: String,
-		val segs: List<SegMeta>
+
+	data class XPathMeta(
+		val xpath: String,         // итоговый путь
+		val segs: List<SegMeta>   // метаданные для GUI-редактора
 	)
+
 
 	companion object {
 		private val XML_PATTERN: Pattern = Pattern.compile(
