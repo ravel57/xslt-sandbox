@@ -74,7 +74,10 @@ class XmlXsltValidatorApp : Application() {
 		val searchBtn = Button("Search").apply {
 			setOnAction { showSearchWindow(primaryStage, currentArea ?: xmlArea) }
 		}
-		val toolBar = HBox(5.0, validateBtn, searchBtn).apply {
+		val xpathBtn = Button("XPath…").apply {
+			setOnAction { openXPathEditor(primaryStage) }
+		}
+		val toolBar = HBox(5.0, validateBtn, searchBtn, xpathBtn).apply {
 			padding = Insets(10.0)
 		}
 
@@ -203,7 +206,6 @@ class XmlXsltValidatorApp : Application() {
 		Platform.runLater {
 			resultArea.replaceText(writer.toString())
 			highlightAllMatches(resultArea, currentQuery, true)
-//			resultArea.setStyleSpans(0, computeHighlighting(resultArea.text))
 			showStatus(owner, status.toString())
 		}
 	}
@@ -249,7 +251,7 @@ class XmlXsltValidatorApp : Application() {
 		val dialog = Stage().apply {
 			initOwner(owner)
 			initModality(Modality.NONE)
-			isAlwaysOnTop = true
+//			isAlwaysOnTop = true
 			title = "Search"
 		}
 		searchDialog = dialog
@@ -402,6 +404,222 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
+	private fun buildXPath(xml: String, offset: Int): String {
+		data class Frame(
+			val name: String,
+			var index: Int,
+			val attrs: Map<String, String>             //  ←  добавили
+		)
+
+		val stack = ArrayDeque<Frame>()
+		var i = 0
+		val openTag = Regex("""<([A-Za-z_][\w\-.]*)([^>]*)?>""")
+		val closeTag = Regex("""</([A-Za-z_][\w\-.]*)\s*>""")
+		val selfClose = Regex("""<([A-Za-z_][\w\-.]*)([^>]*)?/>""")
+		val attrRegex = Regex("""([\w:-]+)\s*=\s*(['"])(.*?)\2""")
+
+		fun path() = stack.joinToString("") { "/${it.name}[${it.index}]" }
+
+		while (i < xml.length) {
+			val lt = xml.indexOf('<', i)
+			if (lt < 0) break
+			if (offset in i until lt) return path()           // курсор на текстовом узле
+
+			var handled = false
+
+			fun attrsOf(tag: String): Map<String, String> =
+				attrRegex.findAll(tag).associate { it.groupValues[1] to it.groupValues[3] }
+
+			/* -------- <tag ...> -------- */
+			openTag.matchAt(xml, lt)?.also { m ->
+				val name = m.groupValues[1]
+				val gt = xml.indexOf('>', lt)
+				val attributes = attrsOf(xml.substring(lt, gt + 1))
+				val idx = stack.count { it.name == name } + 1
+				stack.addLast(Frame(name, idx, attributes))
+
+				if (offset in lt..gt) {                            // курсор внутри <tag …>
+					attrRegex.findAll(xml, lt).forEach { a ->
+						val s = lt + a.range.first
+						val e = lt + a.range.last
+						if (offset in s..e) return "${path()}/@${a.groupValues[1]}"
+					}
+					return path()
+				}
+
+				if (xml[gt - 1] == '/') stack.removeLast()        // self-closing
+				i = gt + 1; handled = true
+			}
+
+			/* -------- </tag> -------- */
+			if (!handled) closeTag.matchAt(xml, lt)?.also {
+				if (stack.isNotEmpty()) stack.removeLast()
+				i = xml.indexOf('>', lt).let { if (it < 0) xml.length else it + 1 }
+				handled = true
+			}
+
+			/* -------- <tag .../>  (с пробелом перед />) -------- */
+			if (!handled) selfClose.matchAt(xml, lt)?.also { m ->
+				val gt = xml.indexOf('>', lt)
+				val name = m.groupValues[1]
+				val idx = stack.count { it.name == name } + 1
+				if (offset in lt..gt) return "${path()}/$name[$idx]"
+				i = gt + 1; handled = true
+			}
+
+			if (!handled) i = lt + 1
+		}
+		return ""
+	}
+
+
+	private fun openXPathEditor(owner: Stage) {
+		if (currentArea !== xmlArea) return
+		val meta = buildXPathWithMeta(xmlArea.text, xmlArea.selection.start)
+		if (meta.xpath.isBlank()) {
+			showStatus(owner, "Не удалось построить XPath"); return
+		}
+
+		/* уже открыто? просто обновляем поле и выводим вперёд */
+		searchDialog?.let { dlg ->
+			(dlg.scene.lookup("#xpathField") as TextField).text = meta.xpath
+			dlg.toFront(); dlg.requestFocus(); return
+		}
+
+		/* строим строки выбора */
+		val rows = meta.segs.map { seg ->
+			val lbl = Label(seg.name)
+			val cb  = ChoiceBox<String>()
+			val choices = mutableListOf<String>()
+			choices += if (seg.predicate.isNotEmpty()) "по индексу ${seg.predicate}"
+			else "без предиката"
+			seg.attrs.forEach { (k,v) -> choices += "@$k='$v'" }
+			cb.items.addAll(choices); cb.value = choices[0]
+			HBox(6.0, lbl, cb)
+		}
+
+		val resultField = TextField(meta.xpath).apply {
+			id = "xpathField"; isEditable = false
+		}
+
+		fun rebuild() {
+			val sb = StringBuilder()
+			rows.forEachIndexed { iRow, h ->
+				val name  = (h.children[0] as Label).text
+				val sel   = (h.children[1] as ChoiceBox<*>).value as String
+				sb.append('/').append(name)
+				when {
+					sel.startsWith("@") -> sb.append("[$sel]")
+					sel.startsWith("по индексу") -> sb.append(meta.segs[iRow].predicate)
+					// «без предиката» – ничего
+				}
+			}
+			resultField.text = sb.toString()
+		}
+		rows.forEach { (it.children[1] as ChoiceBox<*>)
+			.valueProperty().addListener { _,_,_-> rebuild() } }
+
+		val okBtn = Button("Copy & Close")
+		val dlg   = Stage()
+		searchDialog = dlg                             // запомнили
+		okBtn.setOnAction {
+			val clip = javafx.scene.input.Clipboard.getSystemClipboard()
+			clip.setContent(javafx.scene.input.ClipboardContent().apply {
+				putString(resultField.text)
+			})
+			dlg.close()
+		}
+
+		dlg.apply {
+			initOwner(owner); initModality(Modality.WINDOW_MODAL)
+			title = "XPath editor"
+			scene = Scene(VBox(8.0,
+				VBox(4.0, *rows.toTypedArray()),
+				resultField, okBtn
+			).apply { padding = Insets(12.0) })
+			setOnHidden { searchDialog = null }        // сбрасываем
+			show()
+		}
+	}
+
+	private fun buildXPathWithMeta(xml: String, offset: Int): XPathMeta {
+		data class Frame(val name: String, var idx: Int, val attrs: Map<String,String>)
+		val openTag   = Regex("""<([A-Za-z_][\w\-.]*)([^>/]*?)>""")
+		val closeTag  = Regex("""</([A-Za-z_][\w\-.]*)\s*>""")
+		val selfClose = Regex("""<([A-Za-z_][\w\-.]*)([^>/]*?)/>""")
+		val attrRx    = Regex("""([\w:-]+)\s*=\s*(['"])(.*?)\2""")
+
+		val stack = ArrayDeque<Frame>()
+		var i = 0
+		fun path() = stack.joinToString("") { "/${it.name}[${it.idx}]" }
+
+		loop@ while (i < xml.length) {
+			val lt = xml.indexOf('<', i)
+			if (lt < 0) break
+			if (offset in i until lt) break
+
+			/* -------- пробуем self-closing -------- */
+			val mSelf = selfClose.matchAt(xml, lt)
+			if (mSelf != null) {
+				val name = mSelf.groupValues[1]
+				val attrs = attrRx.findAll(mSelf.value).associate { it.groupValues[1] to it.groupValues[3] }
+				val idx = stack.count { it.name == name } + 1
+				if (offset in lt..mSelf.range.last)
+					return XPathMeta("${path()}/$name[$idx]", emptyList())
+
+				i = mSelf.range.last + 1
+				continue
+			}
+
+			/* -------- пробуем открывающий -------- */
+			val mOpen = openTag.matchAt(xml, lt)
+			if (mOpen != null) {
+				val name = mOpen.groupValues[1]
+				val attrs = attrRx.findAll(mOpen.value).associate { it.groupValues[1] to it.groupValues[3] }
+				val idx = stack.count { it.name == name } + 1
+				stack.addLast(Frame(name, idx, attrs))
+
+				if (offset in lt..mOpen.range.last) {
+					// курсор внутри тега – возможно попали на атрибут
+					attrRx.findAll(mOpen.value).forEach { a ->
+						val s = lt + a.range.first
+						val e = lt + a.range.last
+						if (offset in s..e)
+							return XPathMeta("${path()}/@${a.groupValues[1]}", emptyList())
+					}
+					break
+				}
+				i = mOpen.range.last + 1
+				continue
+			}
+
+			/* -------- пробуем закрывающий -------- */
+			val mClose = closeTag.matchAt(xml, lt)
+			if (mClose != null) {
+				if (stack.isNotEmpty()) stack.removeLast()
+				i = mClose.range.last + 1
+				continue
+			}
+
+			i = lt + 1
+		}
+
+		val segs = stack.map { SegMeta(it.name, "[${it.idx}]", it.attrs) }
+		return XPathMeta(path(), segs)
+	}
+
+
+	private data class SegMeta(
+		val name: String,
+		val predicate: String,          // "[1]" или "" (если не было индекса)
+		val attrs: Map<String, String>  // все атрибуты у этого узла
+	)
+
+	private data class XPathMeta(
+		val xpath: String,
+		val segs: List<SegMeta>
+	)
+
 	companion object {
 		private val XML_PATTERN: Pattern = Pattern.compile(
 
@@ -417,28 +635,6 @@ class XmlXsltValidatorApp : Application() {
 
 					"|(?<BRACKET>/?>)"
 		)
-
-		private fun computeHighlighting(text: String) =
-			StyleSpansBuilder<Collection<String>>().apply {
-				var lastEnd = 0
-				val m = XML_PATTERN.matcher(text)
-				while (m.find()) {
-					add(emptyList(), m.start() - lastEnd)
-					val styleClass = when {
-						m.group("COMMENT") != null -> "comment"
-						m.group("CDATA") != null -> "cdata"
-						m.group("TAG") != null -> "tag"
-						m.group("LOCAL") != null -> "local"
-						m.group("ATTR") != null -> "attribute"
-						m.group("VALUE") != null -> "value"
-						m.group("BRACKET") != null -> "bracket"
-						else -> ""
-					}
-					add(listOf(styleClass), m.end() - m.start())
-					lastEnd = m.end()
-				}
-				add(emptyList(), text.length - lastEnd)
-			}.create()
 	}
 }
 
