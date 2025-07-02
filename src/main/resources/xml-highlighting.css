@@ -1,0 +1,34 @@
+.comment {
+    -fx-fill: #6A9955;
+}
+
+.cdata {
+    -fx-fill: #606060;
+}
+
+.tag {
+    -fx-fill: #1b8cef;
+}
+
+.attribute {
+    -fx-fill: #f18383;
+}
+
+.value {
+    -fx-fill: #CE9178;
+}
+
+.bracket {
+    -fx-fill: #1b8cef;
+}
+
+.local {
+    -fx-fill: #065ea5;
+}
+
+.styled-text-area .selection {
+    -fx-fill: rgba(128,128,128,0.3) !important;
+}
+.styled-text-area .selection-unfocused {
+    -fx-fill: rgba(128,128,128,0.15) !important;
+}

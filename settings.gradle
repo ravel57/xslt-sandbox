@@ -1,1 +1,11 @@
-rootProject.name = "xslt-sandbox"
+pluginManagement {
+	repositories {
+		gradlePluginPortal()
+		mavenCentral()
+		maven {
+			name = "GluonEA"
+			url = uri("https://nexus.gluonhq.com/nexus/content/repositories/ea/")
+		}
+	}
+}
+rootProject.name = 'xslt-sandbox'

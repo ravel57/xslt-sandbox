@@ -10,6 +10,7 @@ plugins {
 	id 'org.openjfx.javafxplugin' version '0.0.13'
 	id 'org.beryx.jlink' version '2.25.0'
 	id 'com.github.johnrengelman.shadow' version '7.1.2'
+	id 'com.gluonhq.gluonfx-gradle-plugin' version '1.0.26'
 }
 
 group = 'ru.ravel'
@@ -52,7 +53,7 @@ javafx {
 
 application {
 	mainModule = 'ru.ravel.xsltsandbox'
-	mainClass = 'ru.ravel.xsltsandbox.HelloApplicationKt'
+	mainClass = 'ru.ravel.xsltsandbox.XmlXsltValidatorAppKt'
 }
 
 // Компиляция Kotlin-классов в тот же каталог, что и Java
@@ -100,5 +101,43 @@ jar {
 		attributes(
 				'Main-Class': 'ru.ravel.xsltsandbox.XmlXsltValidatorAppKt'
 		)
+	}
+}
+
+sourceSets {
+	main {
+		resources {
+			srcDirs = ['src/main/resources', 'src/resources']
+		}
+	}
+}
+
+kotlin {
+	sourceSets["main"].resources.srcDir("src/main/resources")
+}
+
+//tasks.named('clean', Delete) {
+//	delete = delete.filter {
+//		!it.toString().contains("${buildDir}/gluonfx")
+//	}
+//}
+
+gluonfx {
+	graalvmHome = 'C:/Program Files/Java/graalvm-jdk-24.0.1+9.1'
+	javaStaticSdkVersion = '24-2'
+	javafxStaticSdkVersion = '24-ea+7.1'
+	target = 'host'
+	mainClassName = 'ru.ravel.xsltsandbox.XmlXsltValidatorAppKt'
+	verbose = true
+	enableSwRendering = false
+	runtimeArgs = [
+			"-agentlib:native-image-agent=config-output-dir=${buildDir}/agent-output"
+//			, '--auto-fallback'
+	]
+}
+
+afterEvaluate {
+	tasks.named('mergeClasses') {
+		mustRunAfter tasks.named('compileTestKotlin')
 	}
 }
