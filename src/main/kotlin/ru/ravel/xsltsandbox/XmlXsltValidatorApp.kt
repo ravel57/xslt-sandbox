@@ -6,6 +6,7 @@ import javafx.geometry.Insets
 import javafx.geometry.Orientation
 import javafx.scene.Scene
 import javafx.scene.control.*
+import javafx.scene.input.KeyCode
 import javafx.scene.input.KeyEvent
 import javafx.scene.layout.BorderPane
 import javafx.scene.layout.HBox
@@ -31,12 +32,16 @@ import javax.xml.transform.TransformerFactory
 import javax.xml.transform.stream.StreamResult
 import javax.xml.transform.stream.StreamSource
 
+
 class XmlXsltValidatorApp : Application() {
 
 	private lateinit var xsltArea: CodeArea
 	private lateinit var xmlArea: CodeArea
 	private lateinit var resultArea: CodeArea
 	private var currentArea: CodeArea? = null
+	private var searchDialog: Stage? = null
+	private var searchField: TextField? = null
+
 
 	override fun start(primaryStage: Stage) {
 		xsltArea = createHighlightingCodeArea()
@@ -85,12 +90,20 @@ class XmlXsltValidatorApp : Application() {
 			System.err.println("⚠️ xml-highlighting.css not found in classpath!")
 		}
 
+		scene.addEventFilter(KeyEvent.KEY_PRESSED) { event ->
+			if (event.code == KeyCode.F && event.isControlDown) {
+				showSearchWindow(primaryStage, currentArea ?: xmlArea)
+				event.consume()
+			}
+		}
+
 		primaryStage.apply {
-			title = "XML ↔ XSLT Validator"
+			title = "XSLT Sandbox"
 			this.scene = scene
 			show()
 		}
 	}
+
 
 	/**
 	 *  Creates a CodeArea with line numbers and XML syntax highlighting
@@ -99,9 +112,9 @@ class XmlXsltValidatorApp : Application() {
 		CodeArea().apply {
 			paragraphGraphicFactory = LineNumberFactory.get(this)
 			textProperty().addListener { _, _, _ ->
-				setStyleSpans(0, computeHighlighting(text))
+				highlightAllMatches(this, "")
 			}
-			setStyleSpans(0, computeHighlighting(text))
+			highlightAllMatches(this, "")
 		}
 
 	/**
@@ -113,6 +126,7 @@ class XmlXsltValidatorApp : Application() {
 		VBox.setVgrow(scrolled, Priority.ALWAYS)
 		return VBox(4.0, label, scrolled).apply { padding = Insets(8.0) }
 	}
+
 
 	/**
 	 * Performs XML well-formed check, XSLT compilation & transformation
@@ -182,6 +196,7 @@ class XmlXsltValidatorApp : Application() {
 				StreamResult(writer)
 			)
 		} catch (ex: TransformerException) {
+			System.err.println(ex.message)
 		}
 
 		Platform.runLater {
@@ -190,6 +205,7 @@ class XmlXsltValidatorApp : Application() {
 			showStatus(owner, status.toString())
 		}
 	}
+
 
 	/**
 	 * Shows a modal dialog with validation/transformation status
@@ -212,16 +228,32 @@ class XmlXsltValidatorApp : Application() {
 		dialog.show()
 	}
 
+
 	/**
 	 * Opens a modal search window for the given CodeArea
 	 */
 	private fun showSearchWindow(owner: Stage, target: CodeArea) {
+		if (searchDialog != null) {
+			val selected = target.selectedText.takeIf { it.isNotEmpty() } ?: ""
+			searchField?.apply {
+				text = selected
+				requestFocus()
+				selectAll()
+			}
+			searchDialog?.toFront()
+			searchDialog?.requestFocus()
+			return
+		}
 		val dialog = Stage().apply {
 			initOwner(owner)
-			initModality(Modality.WINDOW_MODAL)
+			initModality(Modality.NONE)
+			isAlwaysOnTop = true
 			title = "Search"
 		}
-		val field = TextField().apply { promptText = "Find..." }
+		searchDialog = dialog
+		val initial = target.selectedText.takeIf { it.isNotEmpty() } ?: ""
+		val field = TextField(initial).apply { promptText = "Find..." }
+		searchField = field
 		val nextBtn = Button("Find Next").apply {
 			setOnAction { search(target, field.text, forward = true) }
 		}
@@ -229,13 +261,47 @@ class XmlXsltValidatorApp : Application() {
 			setOnAction { search(target, field.text, forward = false) }
 		}
 		val closeBtn = Button("Close").apply { setOnAction { dialog.close() } }
+		field.textProperty().addListener { _, _, newValue ->
+			highlightAllMatches(target, newValue)
+		}
+		dialog.setOnHidden {
+			searchDialog = null
+			searchField = null
+			highlightAllMatches(target, "")
+		}
+		field.setOnKeyPressed { event ->
+			when {
+				event.code == javafx.scene.input.KeyCode.ENTER && !event.isShiftDown -> {
+					search(target, field.text, forward = true)
+					event.consume()
+				}
+
+				event.code == javafx.scene.input.KeyCode.ENTER && event.isShiftDown -> {
+					search(target, field.text, forward = false)
+					event.consume()
+				}
+			}
+		}
+
 		val hbox = HBox(5.0, field, nextBtn, prevBtn, closeBtn).apply {
 			padding = Insets(10.0)
 		}
-
-		dialog.scene = Scene(hbox)
+		val scene = Scene(hbox)
+		scene.setOnKeyPressed { event ->
+			if (event.code == KeyCode.ESCAPE) {
+				dialog.close()
+			}
+		}
+		dialog.scene = scene
 		dialog.show()
+
+		Platform.runLater {
+			field.requestFocus()
+			field.selectAll()
+			highlightAllMatches(target, field.text)
+		}
 	}
+
 
 	/**
 	 * Finds the query in the CodeArea (forward/backward) and scrolls to it
@@ -243,18 +309,85 @@ class XmlXsltValidatorApp : Application() {
 	private fun search(area: CodeArea, query: String, forward: Boolean) {
 		if (query.isEmpty()) return
 		val text = area.text
-		val start = if (forward) area.caretPosition else area.selection.start - 1
+		val len = query.length
+		val caret = area.caretPosition
+		val anchor = if (forward) caret else caret - len - 1
+
 		val idx = if (forward) {
-			text.indexOf(query, start, ignoreCase = true)
+			text.indexOf(query, anchor.coerceAtLeast(0), ignoreCase = true)
+				.let { if (it < 0) text.indexOf(query, 0, ignoreCase = true) else it }
 		} else {
-			text.lastIndexOf(query, start.coerceAtLeast(0), ignoreCase = true)
+			text.lastIndexOf(query, anchor.coerceAtLeast(-1), ignoreCase = true)
+				.let { if (it < 0) text.lastIndexOf(query, text.lastIndex, ignoreCase = true) else it }
 		}
 		if (idx >= 0) {
-			area.selectRange(idx, idx + query.length)
+			area.selectRange(idx, idx + len)
 			val pos = area.offsetToPosition(idx, Bias.Forward)
 			area.showParagraphAtCenter(pos.major)
 		}
 	}
+
+
+	private fun highlightAllMatches(area: CodeArea, query: String) {
+		val text = area.text
+		if (text.isEmpty()) {
+			val spans = StyleSpansBuilder<Collection<String>>()
+			spans.add(emptyList(), 0)
+			area.setStyleSpans(0, spans.create())
+			return
+		}
+		val styles = computeSyntaxHighlightingChars(text)
+		if (query.isNotEmpty()) {
+			Regex(Regex.escape(query), RegexOption.IGNORE_CASE)
+				.findAll(text)
+				.forEach { m ->
+					for (i in m.range) {
+						if (i in styles.indices) styles[i].add("search-result")
+					}
+				}
+		}
+		val spans = StyleSpansBuilder<Collection<String>>()
+		var prev: List<String>? = null
+		var runStart = 0
+		for (i in styles.indices) {
+			if (prev == null || prev != styles[i]) {
+				if (prev != null && i > runStart) {
+					spans.add(prev, i - runStart)
+				}
+				prev = styles[i]
+				runStart = i
+			}
+		}
+		if (prev != null && runStart < styles.size) {
+			spans.add(prev, styles.size - runStart)
+		}
+		area.setStyleSpans(0, spans.create())
+	}
+
+
+	private fun computeSyntaxHighlightingChars(text: String): List<MutableList<String>> {
+		val styles = MutableList(text.length) { mutableListOf<String>() }
+		val matcher = XML_PATTERN.matcher(text)
+		while (matcher.find()) {
+			val style = when {
+				matcher.group("COMMENT") != null -> "comment"
+				matcher.group("CDATA") != null -> "cdata"
+				matcher.group("TAG") != null -> "tag"
+				matcher.group("LOCAL") != null -> "local"
+				matcher.group("ATTR") != null -> "attribute"
+				matcher.group("VALUE") != null -> "value"
+				matcher.group("BRACKET") != null -> "bracket"
+				else -> null
+			}
+			if (style != null) {
+				for (i in matcher.start() until matcher.end()) {
+					if (i in styles.indices) styles[i].add(style)
+				}
+			}
+		}
+		return styles
+	}
+
 
 	companion object {
 		private val XML_PATTERN: Pattern = Pattern.compile(
