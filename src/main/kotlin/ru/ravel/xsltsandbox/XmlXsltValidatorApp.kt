@@ -39,24 +39,20 @@ class XmlXsltValidatorApp : Application() {
 	private var currentArea: CodeArea? = null
 
 	override fun start(primaryStage: Stage) {
-		// 1) Initialize CodeAreas with syntax highlighting & line numbers
 		xsltArea = createHighlightingCodeArea()
 		xmlArea = createHighlightingCodeArea()
 		resultArea = createHighlightingCodeArea().apply { isEditable = false }
 
-		// 2) Track focus for search
 		listOf(xsltArea, xmlArea, resultArea).forEach { area ->
 			area.setOnMouseClicked { currentArea = area }
 			area.addEventHandler(KeyEvent.KEY_PRESSED) { currentArea = area }
 		}
 		currentArea = xmlArea
 
-		// 3) Wrap in labeled panes
 		val xsltBox = vBoxWithLabel("XSLT", xsltArea)
 		val xmlBox = vBoxWithLabel("XML", xmlArea)
 		val resultBox = vBoxWithLabel("Result", resultArea)
 
-		// 4) SplitPanes for resizable layout
 		val topSplit = SplitPane(xsltBox, xmlBox).apply {
 			orientation = Orientation.HORIZONTAL
 			setDividerPositions(0.5)
@@ -66,7 +62,6 @@ class XmlXsltValidatorApp : Application() {
 			setDividerPositions(0.7)
 		}
 
-		// 5) Toolbar buttons
 		val validateBtn = Button("Validate & Transform").apply {
 			setOnAction { doTransform(primaryStage) }
 		}
@@ -77,7 +72,6 @@ class XmlXsltValidatorApp : Application() {
 			padding = Insets(10.0)
 		}
 
-		// 6) Main layout
 		val root = BorderPane().apply {
 			top = toolBar
 			center = mainSplit
@@ -98,19 +92,21 @@ class XmlXsltValidatorApp : Application() {
 		}
 	}
 
-	/** Creates a CodeArea with line numbers and XML syntax highlighting */
+	/**
+	 *  Creates a CodeArea with line numbers and XML syntax highlighting
+	 */
 	private fun createHighlightingCodeArea(): CodeArea =
 		CodeArea().apply {
 			paragraphGraphicFactory = LineNumberFactory.get(this)
-			// Recompute styles on text change
 			textProperty().addListener { _, _, _ ->
 				setStyleSpans(0, computeHighlighting(text))
 			}
-			// Highlight any existing text immediately
 			setStyleSpans(0, computeHighlighting(text))
 		}
 
-	/** Wraps a CodeArea in a VBox with a label and VirtualizedScrollPane */
+	/**
+	 * Wraps a CodeArea in a VBox with a label and VirtualizedScrollPane
+	 */
 	private fun vBoxWithLabel(labelText: String, area: CodeArea): VBox {
 		val label = Label(labelText)
 		val scrolled = VirtualizedScrollPane(area)
@@ -118,11 +114,12 @@ class XmlXsltValidatorApp : Application() {
 		return VBox(4.0, label, scrolled).apply { padding = Insets(8.0) }
 	}
 
-	/** Performs XML well-formed check, XSLT compilation & transformation */
+	/**
+	 * Performs XML well-formed check, XSLT compilation & transformation
+	 */
 	private fun doTransform(owner: Stage) {
 		val status = StringBuilder()
 
-		// 1) Check XML well-formedness via SAX
 		try {
 			SAXParserFactory.newInstance().apply {
 				isNamespaceAware = true
@@ -148,7 +145,6 @@ class XmlXsltValidatorApp : Application() {
 			status.append("XML parsing halted: ${ex.message}\n")
 		}
 
-		// 2) Compile XSLT with Saxon HE for XPath 2.0+ support
 		val tfFactory: TransformerFactory = TransformerFactory.newInstance(
 			"net.sf.saxon.TransformerFactoryImpl",
 			XmlXsltValidatorApp::class.java.classLoader
@@ -177,7 +173,6 @@ class XmlXsltValidatorApp : Application() {
 			return
 		}
 
-		// 3) Perform the transformation
 		val writer = StringWriter()
 		try {
 			templates.newTransformer().apply {
@@ -187,10 +182,8 @@ class XmlXsltValidatorApp : Application() {
 				StreamResult(writer)
 			)
 		} catch (ex: TransformerException) {
-			// details already in status
 		}
 
-		// 4) Update UI on JavaFX thread
 		Platform.runLater {
 			resultArea.replaceText(writer.toString())
 			resultArea.setStyleSpans(0, computeHighlighting(resultArea.text))
@@ -198,7 +191,9 @@ class XmlXsltValidatorApp : Application() {
 		}
 	}
 
-	/** Shows a modal dialog with validation/transformation status */
+	/**
+	 * Shows a modal dialog with validation/transformation status
+	 */
 	private fun showStatus(owner: Stage, text: String) {
 		val dialog = Stage().apply {
 			initOwner(owner)
@@ -217,7 +212,9 @@ class XmlXsltValidatorApp : Application() {
 		dialog.show()
 	}
 
-	/** Opens a modal search window for the given CodeArea */
+	/**
+	 * Opens a modal search window for the given CodeArea
+	 */
 	private fun showSearchWindow(owner: Stage, target: CodeArea) {
 		val dialog = Stage().apply {
 			initOwner(owner)
@@ -240,7 +237,9 @@ class XmlXsltValidatorApp : Application() {
 		dialog.show()
 	}
 
-	/** Finds the query in the CodeArea (forward/backward) and scrolls to it */
+	/**
+	 * Finds the query in the CodeArea (forward/backward) and scrolls to it
+	 */
 	private fun search(area: CodeArea, query: String, forward: Boolean) {
 		if (query.isEmpty()) return
 		val text = area.text
@@ -259,17 +258,17 @@ class XmlXsltValidatorApp : Application() {
 
 	companion object {
 		private val XML_PATTERN: Pattern = Pattern.compile(
-			// комментарии и CDATA
+
 			"(?<COMMENT><!--[\\s\\S]*?-->)" +
 					"|(?<CDATA><!\\[CDATA\\[[\\s\\S]*?]]>)" +
-					// начало/конец тега, без локального имени
+
 					"|(?<TAG></?\\w+)" +
-					// захватываем двоеточие + локальную часть (value-of, template и т.п.)
+
 					"|(?<LOCAL>:[\\w-]+)" +
-					// атрибуты и их значения
+
 					"|(?<ATTR>\\b\\w+(?==))" +
 					"|(?<VALUE>\"[^\"]*\")" +
-					// сами скобки '>' или '/>'
+
 					"|(?<BRACKET>/?>)"
 		)
 
