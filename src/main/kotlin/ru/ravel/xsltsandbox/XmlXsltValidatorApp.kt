@@ -41,12 +41,13 @@ class XmlXsltValidatorApp : Application() {
 	private var currentArea: CodeArea? = null
 	private var searchDialog: Stage? = null
 	private var searchField: TextField? = null
+	private var currentQuery: String = ""
 
 
 	override fun start(primaryStage: Stage) {
-		xsltArea = createHighlightingCodeArea()
-		xmlArea = createHighlightingCodeArea()
-		resultArea = createHighlightingCodeArea().apply { isEditable = false }
+		xsltArea = createHighlightingCodeArea(false)
+		xmlArea = createHighlightingCodeArea(false)
+		resultArea = createHighlightingCodeArea(true).apply { isEditable = false }
 
 		listOf(xsltArea, xmlArea, resultArea).forEach { area ->
 			area.setOnMouseClicked { currentArea = area }
@@ -108,13 +109,13 @@ class XmlXsltValidatorApp : Application() {
 	/**
 	 *  Creates a CodeArea with line numbers and XML syntax highlighting
 	 */
-	private fun createHighlightingCodeArea(): CodeArea =
+	private fun createHighlightingCodeArea(highlightNaN: Boolean): CodeArea =
 		CodeArea().apply {
 			paragraphGraphicFactory = LineNumberFactory.get(this)
 			textProperty().addListener { _, _, _ ->
-				highlightAllMatches(this, "")
+				highlightAllMatches(this, "", highlightNaN)
 			}
-			highlightAllMatches(this, "")
+			highlightAllMatches(this, "", highlightNaN)
 		}
 
 	/**
@@ -201,7 +202,8 @@ class XmlXsltValidatorApp : Application() {
 
 		Platform.runLater {
 			resultArea.replaceText(writer.toString())
-			resultArea.setStyleSpans(0, computeHighlighting(resultArea.text))
+			highlightAllMatches(resultArea, currentQuery, true)
+//			resultArea.setStyleSpans(0, computeHighlighting(resultArea.text))
 			showStatus(owner, status.toString())
 		}
 	}
@@ -262,12 +264,13 @@ class XmlXsltValidatorApp : Application() {
 		}
 		val closeBtn = Button("Close").apply { setOnAction { dialog.close() } }
 		field.textProperty().addListener { _, _, newValue ->
-			highlightAllMatches(target, newValue)
+			currentQuery = newValue
+			highlightAllMatches(target, currentQuery, target === resultArea)
 		}
 		dialog.setOnHidden {
 			searchDialog = null
 			searchField = null
-			highlightAllMatches(target, "")
+			highlightAllMatches(target, "", true)
 		}
 		field.setOnKeyPressed { event ->
 			when {
@@ -298,7 +301,7 @@ class XmlXsltValidatorApp : Application() {
 		Platform.runLater {
 			field.requestFocus()
 			field.selectAll()
-			highlightAllMatches(target, field.text)
+			highlightAllMatches(target, field.text, true)
 		}
 	}
 
@@ -328,7 +331,7 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
-	private fun highlightAllMatches(area: CodeArea, query: String) {
+	private fun highlightAllMatches(area: CodeArea, query: String, highlightNaN: Boolean) {
 		val text = area.text
 		if (text.isEmpty()) {
 			val spans = StyleSpansBuilder<Collection<String>>()
@@ -337,6 +340,15 @@ class XmlXsltValidatorApp : Application() {
 			return
 		}
 		val styles = computeSyntaxHighlightingChars(text)
+		// Подсветка NaN всегда (НЕ только при поиске)
+		if (highlightNaN) {
+			Regex("\\bNaN\\b").findAll(text).forEach { m ->
+				for (i in m.range) {
+					if (i in styles.indices) styles[i].add("nan-highlight")
+				}
+			}
+		}
+		// Подсветка поиска (для всех полей)
 		if (query.isNotEmpty()) {
 			Regex(Regex.escape(query), RegexOption.IGNORE_CASE)
 				.findAll(text)
@@ -346,6 +358,7 @@ class XmlXsltValidatorApp : Application() {
 					}
 				}
 		}
+		// Сборка
 		val spans = StyleSpansBuilder<Collection<String>>()
 		var prev: List<String>? = null
 		var runStart = 0

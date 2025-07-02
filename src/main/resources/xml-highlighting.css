@@ -37,3 +37,8 @@
 .search-result {
     -rtfx-background-color: rgba(21, 255, 0, 0.22) !important;
 }
+
+.nan-highlight {
+    -fx-fill: #fff;
+    -rtfx-background-color: #e53935;
+}
