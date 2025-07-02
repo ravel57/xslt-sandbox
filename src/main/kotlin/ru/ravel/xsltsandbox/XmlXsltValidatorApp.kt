@@ -1,5 +1,6 @@
 package ru.ravel.xsltsandbox
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import javafx.application.Application
 import javafx.application.Platform
 import javafx.geometry.Insets
@@ -49,9 +50,27 @@ class XmlXsltValidatorApp : Application() {
 	private val watchService: WatchService = FileSystems.getDefault().newWatchService()
 	private val watchMap = mutableMapOf<WatchKey, Path>()
 	private lateinit var currentStage: Stage
+	private val configPath: Path = Paths.get(System.getenv("APPDATA"), "xslt-sandbox", "config.json")
+	private lateinit var config: AppConfig
 
 
 	override fun init() {
+		config = runCatching {
+			jacksonObjectMapper().readValue(configPath.toFile(), AppConfig::class.java)
+		}.getOrElse { AppConfig() }
+
+		// Восстанавливаем пути, даже если не читаем файлы сразу
+		config.xml?.let { p ->
+			val path = Paths.get(p)
+			if (Files.exists(path)) xmlPath = path
+		}
+		config.xslt?.let { p ->
+			val path = Paths.get(p)
+			if (Files.exists(path)) xsltPath = path
+		}
+		config.xml?.let { xmlPath = Paths.get(it) }
+		config.xslt?.let { xsltPath = Paths.get(it) }
+
 		// запускаем ещё до start()
 		Thread {
 			while (!Thread.currentThread().isInterrupted) {
@@ -76,6 +95,7 @@ class XmlXsltValidatorApp : Application() {
 
 	override fun stop() {
 		try {
+			saveConfig()
 			watchService.close()
 		} catch (_: Exception) {
 		}
@@ -87,7 +107,7 @@ class XmlXsltValidatorApp : Application() {
 		xsltArea = createHighlightingCodeArea(false)
 		xmlArea = createHighlightingCodeArea(false)
 		resultArea = createHighlightingCodeArea(true).apply { isEditable = false }
-
+		restorePreviouslyOpenedFiles()
 		listOf(xsltArea, xmlArea, resultArea).forEach { area ->
 			area.setOnMouseClicked { currentArea = area }
 			area.addEventHandler(KeyEvent.KEY_PRESSED) { currentArea = area }
@@ -116,25 +136,32 @@ class XmlXsltValidatorApp : Application() {
 		val xpathBtn = Button("XPath…").apply {
 			setOnAction { openXPathEditor(primaryStage) }
 		}
-		// XML
-		val openXmlBtn = createOpenButton(
-			"Open XML…",
-			"XML Files (*.xml)",
-			xmlArea,              // targetArea
-			"*.xml"               // vararg расширений
-		) { xmlPath = it }
+		val openXmlBtn = Button("Open XML…").apply {
+			setOnAction {
+				val file = createChooser(
+					"Open XML…", xmlPath, "XML Files (*.xml)", "*.xml"
+				).showOpenDialog(currentStage) ?: return@setOnAction
 
-		// XSLT
-		val openXsltBtn = createOpenButton(
-			"Open XSLT…",
-			"XSLT Files (*.xsl, *.xslt)",
-			xsltArea,             // targetArea
-			"*.xsl", "*.xslt"     // vararg расширений
-		) { xsltPath = it }
+				loadFileIntoArea(file.toPath(), xmlArea) { xmlPath = it }
+			}
+		}
+		val openXsltBtn = Button("Open XSLT…").apply {
+			setOnAction {
+				val file = createChooser(
+					"Open XSLT…", xsltPath,
+					"XSLT Files (*.xsl, *.xslt)", "*.xsl", "*.xslt"
+				).showOpenDialog(currentStage) ?: return@setOnAction
+
+				loadFileIntoArea(file.toPath(), xsltArea) { xsltPath = it }
+			}
+		}
+		val saveXsltBtn = Button("Save XSLT…").apply {
+			setOnAction { saveCurrentXslt() }
+		}
 		val toolBar = HBox(5.0, validateBtn, searchBtn, xpathBtn).apply {
 			padding = Insets(10.0)
 		}
-		val filesBar = HBox(5.0, openXsltBtn, openXmlBtn).apply {
+		val filesBar = HBox(5.0, openXsltBtn, saveXsltBtn, openXmlBtn).apply {
 			padding = Insets(10.0)
 		}
 		val hBox = HBox(5.0, toolBar, filesBar)
@@ -158,7 +185,6 @@ class XmlXsltValidatorApp : Application() {
 				event.consume()
 			}
 		}
-
 		primaryStage.apply {
 			title = "XSLT Sandbox"
 			this.scene = scene
@@ -199,25 +225,80 @@ class XmlXsltValidatorApp : Application() {
 	 * @param exts           vararg расширений ("*.xml", "*.xsl" …)
 	 * @param pathSetter     лямбда, куда сохраняем выбранный Path
 	 */
-	private fun createOpenButton(
-		caption: String,
-		extDescription: String,
-		targetArea: CodeArea,          // ① сейчас третьим
-		vararg exts: String,           // ② все расширения после CodeArea
-		pathSetter: (Path) -> Unit
-	): Button = Button(caption).apply {
+	private fun createChooser(
+		title: String,
+		lastPath: Path?,
+		description: String,
+		vararg masks: String
+	): FileChooser = FileChooser().apply {
+		this.title = title
+		extensionFilters += FileChooser.ExtensionFilter(description, *masks)
+		lastPath?.parent
+			?.takeIf { Files.isDirectory(it) }
+			?.let { initialDirectory = it.toFile() } // ❷ папка из конфига
+	}
 
-		setOnAction {
-			val chooser = FileChooser().apply {
-				title = caption
-				extensionFilters += FileChooser.ExtensionFilter(extDescription, *exts)
-			}
-			val file = chooser.showOpenDialog(currentStage) ?: return@setOnAction
-			val path = file.toPath()
-			pathSetter(path)                       // запоминаем путь
-			path.registerWatch()                   // следим за изменениями
-			reloadFileIntoArea(path, targetArea)   // читаем в CodeArea
+
+	private fun saveConfig() {
+		try {
+			Files.createDirectories(configPath.parent)
+			Files.writeString(
+				configPath,
+				jacksonObjectMapper().writerWithDefaultPrettyPrinter()
+					.writeValueAsString(
+						AppConfig(xmlPath?.toString(), xsltPath?.toString())
+					),
+				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+				StandardOpenOption.WRITE
+			)
+		} catch (ex: Exception) {
+			println("Не удалось сохранить config.json → ${ex.message}")
 		}
+	}
+
+
+	private fun loadFileIntoArea(path: Path, area: CodeArea, setter: (Path) -> Unit) {
+		runCatching { Files.readString(path) }.onSuccess {
+			setter(path)                 // xmlPath или xsltPath
+			path.registerWatch()         // слежение
+			Platform.runLater {
+				area.replaceText(it)
+				highlightAllMatches(area, currentQuery, area === resultArea)
+			}
+			saveConfig()                 // обновляем config.json
+		}.onFailure {
+			showStatus(currentStage, "Не удалось открыть файл:\n${it.message}")
+		}
+	}
+
+
+	private fun restorePreviouslyOpenedFiles() {
+		xmlPath ?.takeIf { Files.exists(it) }?.let {
+			loadFileIntoArea(it, xmlArea) { xmlPath  = it }
+		}
+		xsltPath?.takeIf { Files.exists(it) }?.let {
+			loadFileIntoArea(it, xsltArea) { xsltPath = it }
+		}
+	}
+
+
+	private fun saveCurrentXslt() {
+		val path = xsltPath ?: run {
+			val file = createChooser(
+				"Save XSLT…", xsltPath,
+				"XSLT Files (*.xsl, *.xslt)", "*.xsl", "*.xslt"
+			).showSaveDialog(currentStage) ?: return
+			file.toPath()
+		}
+		Files.createDirectories(path.parent)
+		Files.writeString(
+			path, xsltArea.text,
+			StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING
+		)
+		xsltPath = path                    // путь для следующих сеансов
+		path.registerWatch()
+		saveConfig()
+		showStatus(currentStage, "XSLT сохранён:\n$path")
 	}
 
 
@@ -495,55 +576,68 @@ class XmlXsltValidatorApp : Application() {
 
 	private fun openXPathEditor(owner: Stage) {
 		if (currentArea !== xmlArea) return
+
 		val meta = buildXPathWithMeta(xmlArea.text, xmlArea.selection.start)
 		if (meta.xpath.isBlank()) {
 			showStatus(owner, "Не удалось построить XPath"); return
 		}
 
-		/* уже открыто? просто обновляем поле и выводим вперёд */
+		/* если окно уже есть – обновляем строку и выводим на-передний-план */
 		searchDialog?.let { dlg ->
 			(dlg.scene.lookup("#xpathField") as TextField).text = meta.xpath
 			dlg.toFront(); dlg.requestFocus(); return
 		}
 
-		/* строим строки выбора */
-		val rows = meta.segs.map { seg ->
+		/* ─────────────── GUI ─────────────── */
+		/** одна строка «имя + ChoiceBox» */
+		fun segRow(seg: SegMeta): HBox {
 			val lbl = Label(seg.name)
 			val cb = ChoiceBox<String>()
-			val choices = mutableListOf<String>()
-			choices += if (seg.predicate.isNotEmpty()) "по индексу ${seg.predicate}"
-			else "без предиката"
-			seg.attrs.forEach { (k, v) -> choices += "@$k='$v'" }
-			cb.items.addAll(choices); cb.value = choices[0]
-			HBox(6.0, lbl, cb)
+			val opts = mutableListOf<String>()
+			if (seg.predicate.isNotEmpty()) opts += "по индексу ${seg.predicate}"
+			opts += "без предиката"
+			seg.attrs.forEach { (k, v) -> opts += "@$k='$v'" }
+			cb.items.addAll(opts); cb.value = opts[0]
+			return HBox(6.0, lbl, cb)
 		}
+
+		val rows = meta.segs.map(::segRow)
+		val rowsBox = VBox(4.0, *rows.toTypedArray())
+		val rowsScroll = ScrollPane(rowsBox).apply {
+			isFitToWidth = true
+			hbarPolicy = ScrollPane.ScrollBarPolicy.NEVER
+		}
+		VBox.setVgrow(rowsScroll, Priority.ALWAYS)   // ← растягивается по высоте
 
 		val resultField = TextField(meta.xpath).apply {
 			id = "xpathField"; isEditable = false
 		}
 
+		/* перестраиваем путь при изменении выбора */
 		fun rebuild() {
 			val sb = StringBuilder()
-			rows.forEachIndexed { iRow, h ->
-				val name = (h.children[0] as Label).text
-				val sel = (h.children[1] as ChoiceBox<*>).value as String
+			rows.forEachIndexed { i, row ->
+				val name = (row.children[0] as Label).text
+				val sel = (row.children[1] as ChoiceBox<*>).value as String
 				sb.append('/').append(name)
 				when {
 					sel.startsWith("@") -> sb.append("[$sel]")
-					sel.startsWith("по индексу") -> sb.append(meta.segs[iRow].predicate)
-					// «без предиката» – ничего
+					sel.startsWith("по индексу") ->
+						sb.append(meta.segs[i].predicate)
+					/* «без предиката» – ничего */
 				}
 			}
 			resultField.text = sb.toString()
 		}
-		rows.forEach {
-			(it.children[1] as ChoiceBox<*>)
-				.valueProperty().addListener { _, _, _ -> rebuild() }
+		rows.forEach { r ->
+			(r.children[1] as ChoiceBox<*>).valueProperty()
+				.addListener { _, _, _ -> rebuild() }
 		}
 
 		val okBtn = Button("Copy & Close")
+
 		val dlg = Stage()
-		searchDialog = dlg                             // запомнили
+		searchDialog = dlg
 		okBtn.setOnAction {
 			val clip = javafx.scene.input.Clipboard.getSystemClipboard()
 			clip.setContent(javafx.scene.input.ClipboardContent().apply {
@@ -553,18 +647,22 @@ class XmlXsltValidatorApp : Application() {
 		}
 
 		dlg.apply {
-			initOwner(owner); initModality(Modality.WINDOW_MODAL)
+			initOwner(owner)
+			initModality(Modality.WINDOW_MODAL)
 			title = "XPath editor"
-			scene = Scene(VBox(
-				8.0,
-				VBox(4.0, *rows.toTypedArray()),
-				resultField, okBtn
-			).apply { padding = Insets(12.0) })
-			setOnHidden { searchDialog = null }        // сбрасываем
+			scene = Scene(VBox(8.0, rowsScroll, resultField, okBtn).apply {
+				padding = Insets(12.0)
+			})
+
+			/* Esc — закрыть */
+			scene.setOnKeyPressed { ev ->
+				if (ev.code == KeyCode.ESCAPE) close()
+			}
+			setOnHidden { searchDialog = null }
+			sizeToScene()
 			show()
 		}
 	}
-
 
 	/**
 	 *  Строит абсолютный XPath до узла/атрибута под курсором
@@ -572,90 +670,59 @@ class XmlXsltValidatorApp : Application() {
 	 *  (имя, исходный индекс-предикат, все найденные атрибуты).
 	 */
 	private fun buildXPathWithMeta(xml: String, offset: Int): XPathMeta {
-		/* вспомогательная обёртка для стека разбора */
+
 		data class Frame(val name: String, var idx: Int, val attrs: Map<String, String>)
 
-		/* шаблоны тегов и атрибутов */
-		val selfRx = Regex("""<([A-Za-z_][\w\-.]*)([^>]*)?/>""")     // <tag …/>
-		val openRx = Regex("""<([A-Za-z_][\w\-.]*)([^>]*)?>""")      // <tag …>
-		val closeRx = Regex("""</([A-Za-z_][\w\-.]*)\s*>""")          // </tag>
-		val attrRx = Regex("""([\w:-]+)\s*=\s*(['"])(.*?)\2""")      // name="value"
+		val selfRx = Regex("""<([A-Za-z_][\w\-.]*)([^>]*)?/>""")
+		val openRx = Regex("""<([A-Za-z_][\w\-.]*)([^>]*)?>""")
+		val closeRx = Regex("""</([A-Za-z_][\w\-.]*)\s*>""")
+		val attrRx = Regex("""([\w:-]+)\s*=\s*(['"])(.*?)\2""")
 
-		fun attrsOf(tagText: String) =
-			attrRx.findAll(tagText).associate { it.groupValues[1] to it.groupValues[3] }
+		val stack = ArrayDeque<Frame>()
+		var i = 0
+		var resultPath: String? = null
 
-		val stack = ArrayDeque<Frame>()            // открытые элементы
-		val segsMutable = mutableListOf<SegMeta>()       // метаданные для GUI
-		var i = 0                              // текущий индекс в xml
-		var resultPath: String? = null                   // итоговый путь
+		fun attrsOf(tag: String) =
+			attrRx.findAll(tag).associate { it.groupValues[1] to it.groupValues[3] }
 
-		fun currentPath() = stack.joinToString("") { "/${it.name}[${it.idx}]" }
+		fun curPath() = stack.joinToString("") { "/${it.name}[${it.idx}]" }
 
-		/* основной проход по xml до позиции курсора */
 		while (i < xml.length) {
-			val lt = xml.indexOf('<', i)
-			if (lt < 0) break
-
-			/* курсор находится в интервале «текст» → двигаемся к следующему '<' */
+			val lt = xml.indexOf('<', i); if (lt < 0) break
 			if (offset in i until lt) {
 				i = lt; continue
 			}
 
 			var handled = false
 
-			/* ---------- <tag …/> ---------- */
 			selfRx.matchAt(xml, lt)?.also { m ->
 				val name = m.groupValues[1]
 				val idx = stack.count { it.name == name } + 1
-				val atts = attrsOf(m.value)
-
-				val cursorInside = offset in lt..m.range.last
-
-				stack.addLast(Frame(name, idx, atts))        // всегда push
-
-				if (cursorInside) {
-					resultPath = currentPath()               // путь найден
-				} else {
-					stack.removeLast()                       // pop ТОЛЬКО если курсор не внутри
-				}
-
-				i = m.range.last + 1
-				handled = true
+				stack.addLast(Frame(name, idx, attrsOf(m.value)))
+				if (offset in lt..m.range.last) resultPath = curPath()
+				stack.removeLast()
+				i = m.range.last + 1; handled = true
 			}
 
-
-			/* ---------- <tag …> ----------- */
 			if (!handled) openRx.matchAt(xml, lt)?.also { m ->
 				val name = m.groupValues[1]
 				val idx = stack.count { it.name == name } + 1
-				val atts = attrsOf(m.value)
-
-				segsMutable += SegMeta(name, "[$idx]", atts)
-				stack.addLast(Frame(name, idx, atts))
-
-				if (offset in lt..m.range.last) resultPath = currentPath()
-
-				i = m.range.last + 1
-				handled = true
+				stack.addLast(Frame(name, idx, attrsOf(m.value)))
+				if (offset in lt..m.range.last) resultPath = curPath()
+				i = m.range.last + 1; handled = true
 			}
 
-			/* ---------- </tag> ------------ */
-			if (!handled) closeRx.matchAt(xml, lt)?.also { m ->
+			if (!handled) closeRx.matchAt(xml, lt)?.also {
 				if (stack.isNotEmpty()) stack.removeLast()
-				i = m.range.last + 1
-				handled = true
+				i = it.range.last + 1; handled = true
 			}
 
-			/* ---------- любой прочий «<» -- */
 			if (!handled) i = lt + 1
-
 			if (resultPath != null) break
 		}
 
-		/* если курсор был на атрибуте – добавляем /@attr */
+		/*  атрибут под курсором  */
 		var attrPred = ""
-		if (resultPath == null && stack.isNotEmpty()) resultPath = currentPath()
-
 		if (stack.isNotEmpty()) {
 			val tagStart = xml.lastIndexOf('<', offset).coerceAtLeast(0)
 			val tagEnd = xml.indexOf('>', tagStart).coerceAtLeast(tagStart)
@@ -668,7 +735,9 @@ class XmlXsltValidatorApp : Application() {
 			}
 		}
 
-		return XPathMeta(resultPath + attrPred, segsMutable)
+		/*  ── СЕГМЕНТЫ ТОЛЬКО ИЗ СТЕКА ──  */
+		val segs = stack.map { SegMeta(it.name, "[${it.idx}]", it.attrs) }
+		return XPathMeta((resultPath ?: curPath()) + attrPred, segs)
 	}
 
 
@@ -706,6 +775,14 @@ class XmlXsltValidatorApp : Application() {
 	data class XPathMeta(
 		val xpath: String,         // итоговый путь
 		val segs: List<SegMeta>   // метаданные для GUI-редактора
+	)
+
+
+	data class AppConfig(
+		val xml: String? = null,
+		val xslt: String? = null,
+		val xmlDir: String? = null,
+		val xsltDir: String? = null
 	)
 
 

@@ -5,8 +5,10 @@ module ru.ravel.xsltsandbox {
 	requires java.xml;
 	requires org.fxmisc.richtext;
 	requires org.fxmisc.flowless;
+	requires com.fasterxml.jackson.kotlin;
+	requires com.fasterxml.jackson.databind;
 
 
-	opens ru.ravel.xsltsandbox to javafx.fxml;
+	opens ru.ravel.xsltsandbox to javafx.fxml, com.fasterxml.jackson.databind;
 	exports ru.ravel.xsltsandbox;
 }
