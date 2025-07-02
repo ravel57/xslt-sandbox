@@ -12,6 +12,7 @@ import javafx.scene.layout.BorderPane
 import javafx.scene.layout.HBox
 import javafx.scene.layout.Priority
 import javafx.scene.layout.VBox
+import javafx.stage.FileChooser
 import javafx.stage.Modality
 import javafx.stage.Stage
 import org.fxmisc.flowless.VirtualizedScrollPane
@@ -24,6 +25,7 @@ import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
 import java.io.StringReader
 import java.io.StringWriter
+import java.nio.file.*
 import java.util.regex.Pattern
 import javax.xml.parsers.SAXParserFactory
 import javax.xml.transform.ErrorListener
@@ -42,9 +44,46 @@ class XmlXsltValidatorApp : Application() {
 	private var searchDialog: Stage? = null
 	private var searchField: TextField? = null
 	private var currentQuery: String = ""
+	private var xmlPath: Path? = null
+	private var xsltPath: Path? = null
+	private val watchService: WatchService = FileSystems.getDefault().newWatchService()
+	private val watchMap = mutableMapOf<WatchKey, Path>()
+	private lateinit var currentStage: Stage
+
+
+	override fun init() {
+		// запускаем ещё до start()
+		Thread {
+			while (!Thread.currentThread().isInterrupted) {
+				val key = watchService.take()          // блокируется
+				val dir = watchMap[key]               // путь файла, за которым следим
+				if (dir != null) {
+					key.pollEvents().forEach { ev ->
+						if (ev.kind() == StandardWatchEventKinds.OVERFLOW) return@forEach
+						val changed = (ev.context() as Path)
+						val fullPath = dir.parent.resolve(changed)
+						when (fullPath) {
+							xmlPath -> reloadFileIntoArea(fullPath, xmlArea)
+							xsltPath -> reloadFileIntoArea(fullPath, xsltArea)
+						}
+					}
+				}
+				key.reset()
+			}
+		}.apply { isDaemon = true }.start()
+	}
+
+
+	override fun stop() {
+		try {
+			watchService.close()
+		} catch (_: Exception) {
+		}
+	}
 
 
 	override fun start(primaryStage: Stage) {
+		currentStage = primaryStage
 		xsltArea = createHighlightingCodeArea(false)
 		xmlArea = createHighlightingCodeArea(false)
 		resultArea = createHighlightingCodeArea(true).apply { isEditable = false }
@@ -77,12 +116,31 @@ class XmlXsltValidatorApp : Application() {
 		val xpathBtn = Button("XPath…").apply {
 			setOnAction { openXPathEditor(primaryStage) }
 		}
+		// XML
+		val openXmlBtn = createOpenButton(
+			"Open XML…",
+			"XML Files (*.xml)",
+			xmlArea,              // targetArea
+			"*.xml"               // vararg расширений
+		) { xmlPath = it }
+
+		// XSLT
+		val openXsltBtn = createOpenButton(
+			"Open XSLT…",
+			"XSLT Files (*.xsl, *.xslt)",
+			xsltArea,             // targetArea
+			"*.xsl", "*.xslt"     // vararg расширений
+		) { xsltPath = it }
 		val toolBar = HBox(5.0, validateBtn, searchBtn, xpathBtn).apply {
 			padding = Insets(10.0)
 		}
+		val filesBar = HBox(5.0, openXsltBtn, openXmlBtn).apply {
+			padding = Insets(10.0)
+		}
+		val hBox = HBox(5.0, toolBar, filesBar)
 
 		val root = BorderPane().apply {
-			top = toolBar
+			top = hBox
 			center = mainSplit
 		}
 
@@ -129,6 +187,37 @@ class XmlXsltValidatorApp : Application() {
 		val scrolled = VirtualizedScrollPane(area)
 		VBox.setVgrow(scrolled, Priority.ALWAYS)
 		return VBox(4.0, label, scrolled).apply { padding = Insets(8.0) }
+	}
+
+
+	/**
+	 * Создаёт кнопку «Open …».
+	 *
+	 * @param caption        текст на кнопке
+	 * @param extDescription подпись фильтра (например "XML Files (*.xml)")
+	 * @param targetArea     CodeArea, в который нужно загрузить текст
+	 * @param exts           vararg расширений ("*.xml", "*.xsl" …)
+	 * @param pathSetter     лямбда, куда сохраняем выбранный Path
+	 */
+	private fun createOpenButton(
+		caption: String,
+		extDescription: String,
+		targetArea: CodeArea,          // ① сейчас третьим
+		vararg exts: String,           // ② все расширения после CodeArea
+		pathSetter: (Path) -> Unit
+	): Button = Button(caption).apply {
+
+		setOnAction {
+			val chooser = FileChooser().apply {
+				title = caption
+				extensionFilters += FileChooser.ExtensionFilter(extDescription, *exts)
+			}
+			val file = chooser.showOpenDialog(currentStage) ?: return@setOnAction
+			val path = file.toPath()
+			pathSetter(path)                       // запоминаем путь
+			path.registerWatch()                   // следим за изменениями
+			reloadFileIntoArea(path, targetArea)   // читаем в CodeArea
+		}
 	}
 
 
@@ -520,17 +609,20 @@ class XmlXsltValidatorApp : Application() {
 				val idx = stack.count { it.name == name } + 1
 				val atts = attrsOf(m.value)
 
-				// фиксируем сегмент ДО снятия со стека
-				segsMutable += SegMeta(name, "[$idx]", atts)
-				stack.addLast(Frame(name, idx, atts))
+				val cursorInside = offset in lt..m.range.last
 
-				// курсор оказался внутри этого тега
-				if (offset in lt..m.range.last) resultPath = currentPath()
+				stack.addLast(Frame(name, idx, atts))        // всегда push
 
-				stack.removeLast()              // self-closing → сразу закрыли
+				if (cursorInside) {
+					resultPath = currentPath()               // путь найден
+				} else {
+					stack.removeLast()                       // pop ТОЛЬКО если курсор не внутри
+				}
+
 				i = m.range.last + 1
 				handled = true
 			}
+
 
 			/* ---------- <tag …> ----------- */
 			if (!handled) openRx.matchAt(xml, lt)?.also { m ->
@@ -578,6 +670,31 @@ class XmlXsltValidatorApp : Application() {
 
 		return XPathMeta(resultPath + attrPred, segsMutable)
 	}
+
+
+	private fun Path.registerWatch() {
+		val key = parent.register(
+			watchService,
+			StandardWatchEventKinds.ENTRY_MODIFY,
+			StandardWatchEventKinds.ENTRY_DELETE
+		)
+		watchMap[key] = this        // запоминаем: по key найдём полный путь
+	}
+
+
+	private fun reloadFileIntoArea(path: Path, area: CodeArea) {
+		// читаем целиком; Platform.runLater, т.к. мы в фоновой нитке
+		try {
+			val txt = Files.readString(path)
+			Platform.runLater {
+				area.replaceText(txt)
+				highlightAllMatches(area, currentQuery, area === resultArea)
+			}
+		} catch (ex: Exception) {
+			println("Cannot read $path → ${ex.message}")
+		}
+	}
+
 
 	data class SegMeta(
 		val name: String,          // имя элемента
