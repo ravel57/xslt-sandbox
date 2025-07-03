@@ -5,6 +5,7 @@ import javafx.application.Application
 import javafx.application.Platform
 import javafx.geometry.Insets
 import javafx.geometry.Orientation
+import javafx.geometry.Pos
 import javafx.scene.Scene
 import javafx.scene.control.*
 import javafx.scene.input.KeyCode
@@ -24,6 +25,9 @@ import org.fxmisc.richtext.model.TwoDimensional.Bias
 import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
+import ru.ravel.xsltsandbox.dto.editor.AppConfig
+import ru.ravel.xsltsandbox.dto.editor.SegMeta
+import ru.ravel.xsltsandbox.dto.editor.XPathMeta
 import java.io.StringReader
 import java.io.StringWriter
 import java.nio.file.*
@@ -36,21 +40,28 @@ import javax.xml.transform.stream.StreamResult
 import javax.xml.transform.stream.StreamSource
 
 
-class XmlXsltValidatorApp : Application() {
+private const val isOpenedInEditorMode: Boolean = true
+
+class XsltValidatorApp(
+	private val configPath: Path = Paths.get(System.getenv("APPDATA"), "xslt-sandbox", "config.json"),
+) : Application() {
+
+	private lateinit var currentStage: Stage
+	private val watchService: WatchService = FileSystems.getDefault().newWatchService()
 
 	private lateinit var xsltArea: CodeArea
 	private lateinit var xmlArea: CodeArea
 	private lateinit var resultArea: CodeArea
 	private var currentArea: CodeArea? = null
+
 	private var searchDialog: Stage? = null
 	private var searchField: TextField? = null
 	private var currentQuery: String = ""
+
 	private var xmlPath: Path? = null
 	private var xsltPath: Path? = null
-	private val watchService: WatchService = FileSystems.getDefault().newWatchService()
+
 	private val watchMap = mutableMapOf<WatchKey, Path>()
-	private lateinit var currentStage: Stage
-	private val configPath: Path = Paths.get(System.getenv("APPDATA"), "xslt-sandbox", "config.json")
 	private lateinit var config: AppConfig
 
 
@@ -155,23 +166,39 @@ class XmlXsltValidatorApp : Application() {
 				loadFileIntoArea(file.toPath(), xsltArea) { xsltPath = it }
 			}
 		}
-		val saveXsltBtn = Button("Save XSLT…").apply {
+		val saveXsltBtn = Button("Save XSLT").apply {
 			setOnAction { saveCurrentXslt() }
 		}
 		val toolBar = HBox(5.0, validateBtn, searchBtn, xpathBtn).apply {
 			padding = Insets(10.0)
 		}
-		val filesBar = HBox(5.0, openXsltBtn, saveXsltBtn, openXmlBtn).apply {
-			padding = Insets(10.0)
+		val filesBar = if (isOpenedInEditorMode) {
+			HBox(5.0, openXsltBtn, saveXsltBtn, openXmlBtn).apply { padding = Insets(10.0) }
+		} else {
+			HBox(5.0, saveXsltBtn).apply { padding = Insets(10.0) }
 		}
-		val hBox = HBox(5.0, toolBar, filesBar)
-
-		val root = BorderPane().apply {
-			top = hBox
-			center = mainSplit
+		val editorRoot = BorderPane().apply {
+			top = HBox(5.0, toolBar, filesBar)
+			center = BorderPane().apply {
+				center = mainSplit
+			}
 		}
 
-		val scene = Scene(root, 900.0, 650.0)
+		val dataDocsRoot = VBox(Label("Тут могут быть DataDocs")).apply {
+			alignment = Pos.CENTER
+		}
+
+		val tabs = TabPane().apply {
+			tabs += Tab("Editor", editorRoot).apply { isClosable = false }
+			tabs += Tab("DataDocs", dataDocsRoot).apply { isClosable = false }
+			tabClosingPolicy = TabPane.TabClosingPolicy.UNAVAILABLE
+		}
+
+		val scene = if (!isOpenedInEditorMode) {
+			Scene(tabs, 900.0, 650.0)
+		} else {
+			Scene(editorRoot, 900.0, 650.0)
+		}
 		val cssUrl = javaClass.classLoader.getResource("xml-highlighting.css")
 		if (cssUrl != null) {
 			scene.stylesheets += cssUrl.toExternalForm()
@@ -273,8 +300,8 @@ class XmlXsltValidatorApp : Application() {
 
 
 	private fun restorePreviouslyOpenedFiles() {
-		xmlPath ?.takeIf { Files.exists(it) }?.let {
-			loadFileIntoArea(it, xmlArea) { xmlPath  = it }
+		xmlPath?.takeIf { Files.exists(it) }?.let {
+			loadFileIntoArea(it, xmlArea) { xmlPath = it }
 		}
 		xsltPath?.takeIf { Files.exists(it) }?.let {
 			loadFileIntoArea(it, xsltArea) { xsltPath = it }
@@ -335,7 +362,7 @@ class XmlXsltValidatorApp : Application() {
 
 		val tfFactory: TransformerFactory = TransformerFactory.newInstance(
 			"net.sf.saxon.TransformerFactoryImpl",
-			XmlXsltValidatorApp::class.java.classLoader
+			XsltValidatorApp::class.java.classLoader
 		).apply {
 			setErrorListener(object : ErrorListener {
 				override fun warning(ex: TransformerException) = report("WARNING in XSLT", ex)
@@ -752,7 +779,7 @@ class XmlXsltValidatorApp : Application() {
 
 
 	private fun reloadFileIntoArea(path: Path, area: CodeArea) {
-		// читаем целиком; Platform.runLater, т.к. мы в фоновой нитке
+		// Читаем целиком; Platform.runLater, т.к. мы в фоновой нитке
 		try {
 			val txt = Files.readString(path)
 			Platform.runLater {
@@ -764,46 +791,22 @@ class XmlXsltValidatorApp : Application() {
 		}
 	}
 
-
-	data class SegMeta(
-		val name: String,          // имя элемента
-		val predicate: String,     // исходный индекс в виде "[n]"
-		val attrs: Map<String, String>  // найденные атрибуты
-	)
-
-
-	data class XPathMeta(
-		val xpath: String,         // итоговый путь
-		val segs: List<SegMeta>   // метаданные для GUI-редактора
-	)
-
-
-	data class AppConfig(
-		val xml: String? = null,
-		val xslt: String? = null,
-		val xmlDir: String? = null,
-		val xsltDir: String? = null
-	)
-
-
 	companion object {
-		private val XML_PATTERN: Pattern = Pattern.compile(
 
+		private val XML_PATTERN: Pattern = Pattern.compile(
 			"(?<COMMENT><!--[\\s\\S]*?-->)" +
 					"|(?<CDATA><!\\[CDATA\\[[\\s\\S]*?]]>)" +
-
 					"|(?<TAG></?\\w+)" +
-
 					"|(?<LOCAL>:[\\w-]+)" +
-
 					"|(?<ATTR>\\b\\w+(?==))" +
 					"|(?<VALUE>\"[^\"]*\")" +
-
 					"|(?<BRACKET>/?>)"
 		)
-	}
-}
 
-fun main() {
-	Application.launch(XmlXsltValidatorApp::class.java)
+
+		@JvmStatic
+		fun main(args: Array<String>) {
+			launch(XsltValidatorApp::class.java)
+		}
+	}
 }
