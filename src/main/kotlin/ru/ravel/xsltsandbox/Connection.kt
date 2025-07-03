@@ -1,3 +1,4 @@
+/*
 package ru.ravel.xsltsandbox
 
 import javafx.scene.paint.Color
@@ -40,3 +41,4 @@ class Connection(
 	)
 
 }
+*/

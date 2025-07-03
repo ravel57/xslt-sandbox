@@ -50,7 +50,7 @@ class BlockNode(
 	private val label = Text(name)
 	val inputCircles = mutableListOf<Circle>()
 	val outputCircles = mutableListOf<Circle>()
-	val connectedLines = mutableListOf<Connection>()
+	val connectedLines = mutableListOf<OrthogonalConnection>()
 	private var dragOffsetX = 0.0
 	private var dragOffsetY = 0.0
 	var onMove: (() -> Unit)? = null
@@ -110,7 +110,11 @@ class BlockNode(
 				val app = scene?.window?.userData as? LayoutEditor
 				app?.selectBlock(this)
 				if (event.clickCount == 2) {
-					showCodeEditor()
+					(scene?.window?.userData as? LayoutEditor)?.selectBlock(this)
+					val validatorStage = Stage().apply {
+						title = "XSLT Validator"
+					}
+					XsltValidatorApp().start(validatorStage)
 					event.consume()
 				}
 			}
@@ -535,20 +539,7 @@ class BlockNode(
 		fun updateTextArea() {
 			val selected = formats[radioButtons.indexOfFirst { it.isSelected }]
 			val formatted = when (selected) {
-//				InputFormatType.JSON -> ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(output)
 				InputFormatType.XML -> XmlMapper().writerWithDefaultPrettyPrinter().writeValueAsString(output)
-//				InputFormatType.YAML -> {
-//					val options = DumperOptions().apply {
-//						defaultFlowStyle = DumperOptions.FlowStyle.BLOCK
-//						isPrettyFlow = true
-//						indent = 2
-//						defaultScalarStyle = DumperOptions.ScalarStyle.PLAIN
-//					}
-//					val yaml = Yaml(options)
-//					yaml.dump(output)
-//				}
-
-//				InputFormatType.PROTOBUF -> TODO()
 			}
 			textArea.text = formatted
 		}

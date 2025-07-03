@@ -1,8 +1,6 @@
 package ru.ravel.xsltsandbox
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
-import groovy.lang.GroovyShell
 import javafx.application.Application
 import javafx.application.Platform
 import javafx.event.EventHandler
@@ -14,7 +12,6 @@ import javafx.scene.control.*
 import javafx.scene.input.KeyCode
 import javafx.scene.input.MouseButton
 import javafx.scene.input.MouseEvent
-import javafx.scene.layout.HBox
 import javafx.scene.layout.Pane
 import javafx.scene.layout.VBox
 import javafx.scene.paint.Color
@@ -22,23 +19,31 @@ import javafx.scene.shape.Circle
 import javafx.scene.shape.Line
 import javafx.stage.FileChooser
 import javafx.stage.Stage
+import javafx.util.Callback
 import ru.ravel.xsltsandbox.model.BlockType
 import ru.ravel.xsltsandbox.model.BlocksData
 import ru.ravel.xsltsandbox.model.InputFormatType
 import java.io.File
 import java.util.*
-import javax.script.ScriptEngineManager
+import javafx.stage.DirectoryChooser
+import javafx.scene.control.MenuBar
+import javafx.scene.control.Menu
+import javafx.scene.control.MenuItem
+import javafx.scene.input.KeyCombination
+import org.w3c.dom.Element
+import javax.xml.parsers.DocumentBuilderFactory
+import kotlin.math.hypot
 
 
 class LayoutEditor : Application() {
 	private var currentProjectFile: File? = null
 	private val blocks = mutableListOf<BlockNode>()
-	val connections = mutableListOf<Connection>()
+	val connections = mutableListOf<OrthogonalConnection>()
 	private var draggingLine: Line? = null
 	private var draggingFromBlock: BlockNode? = null
 	private var draggingFromOutputIndex: Int? = null
 	private var selectedBlock: BlockNode? = null
-	private var selectedConnection: Connection? = null
+	private var selectedConnection: OrthogonalConnection? = null
 	private var activeContextMenu: ContextMenu? = null
 	private val windowW = 800.0
 	private val windowH = 600.0
@@ -57,6 +62,28 @@ class LayoutEditor : Application() {
 		vbarPolicy = ScrollPane.ScrollBarPolicy.ALWAYS
 	}
 	private var lastEnsureVisible = 0L
+	private val fileTreeView = TreeView<File>().apply {
+		isShowRoot = false
+		prefWidth = 250.0
+		cellFactory = Callback { _: TreeView<File> ->
+			object : TreeCell<File>() {
+				override fun updateItem(item: File?, empty: Boolean) {
+					super.updateItem(item, empty)
+					text = if (empty || item == null) "" else item.name
+				}
+			}
+		}
+		selectionModel.selectedItemProperty().addListener { _, _, newItem ->
+			val folder = newItem?.value
+			if (folder != null && folder.isDirectory) {
+				folder.listFiles { f -> f.isFile && f.name == "Layout.xml" }
+					?.firstOrNull()
+					?.let { xmlFile ->
+						importLayoutFromXml(xmlFile)
+					}
+			}
+		}
+	}
 
 
 	override fun start(primaryStage: Stage) {
@@ -87,9 +114,15 @@ class LayoutEditor : Application() {
 				val dx = panLastX - event.screenX
 				val dy = panLastY - event.screenY
 				scrollPane.hvalue = (scrollPane.hvalue * (contentPane.width - scrollPane.viewportBounds.width) + dx)
-					.coerceIn(0.0, contentPane.width - scrollPane.viewportBounds.width) / (contentPane.width - scrollPane.viewportBounds.width)
+					.coerceIn(
+						0.0,
+						contentPane.width - scrollPane.viewportBounds.width
+					) / (contentPane.width - scrollPane.viewportBounds.width)
 				scrollPane.vvalue = (scrollPane.vvalue * (contentPane.height - scrollPane.viewportBounds.height) + dy)
-					.coerceIn(0.0, contentPane.height - scrollPane.viewportBounds.height) / (contentPane.height - scrollPane.viewportBounds.height)
+					.coerceIn(
+						0.0,
+						contentPane.height - scrollPane.viewportBounds.height
+					) / (contentPane.height - scrollPane.viewportBounds.height)
 				panLastX = event.screenX
 				panLastY = event.screenY
 				event.consume()
@@ -110,7 +143,7 @@ class LayoutEditor : Application() {
 				if (n is BlockNode || n is Circle) return@EventHandler // не показываем по блокам и кружкам
 				event.consume()
 				val contextMenu = ContextMenu()
-				BlockType.values().forEach { type ->
+				BlockType.entries.forEach { type ->
 					val item = MenuItem(type.displayName)
 					item.setOnAction {
 						addBlock(contentPane, event.x, event.y, type.displayName, type)
@@ -130,17 +163,6 @@ class LayoutEditor : Application() {
 			contentPane.requestFocus()
 		}
 
-		val newProjectButton = Button("Новый проект").apply {
-			setOnAction {
-				// Очищаем всё
-				blocks.clear()
-				connections.clear()
-				contentPane.children.removeIf { it is BlockNode || it is Line }
-				currentProjectFile = null
-				primaryStage.title = "Low code processes executor"
-			}
-		}
-
 		val openProjectButton = Button("Открыть проект").apply {
 			setOnAction {
 				val fileChooser = FileChooser()
@@ -156,40 +178,11 @@ class LayoutEditor : Application() {
 				}
 			}
 		}
-
-		val saveProjectButton = Button("Сохранить проект").apply {
-			setOnAction {
-				if (currentProjectFile != null) {
-					exportBlocksToFile(currentProjectFile!!)
-				} else {
-					val fileChooser = FileChooser()
-					fileChooser.title = "Сохранить проект"
-					fileChooser.extensionFilters.add(FileChooser.ExtensionFilter("JSON Files", "*.json"))
-					val file = fileChooser.showSaveDialog(primaryStage)
-					if (file != null) {
-						exportBlocksToFile(file)
-						currentProjectFile = file
-						primaryStage.title = currentProjectFile?.name ?: "Low code processes executor"
-					}
-				}
-			}
+		val splitPane = SplitPane(fileTreeView, scrollPane).apply {
+			setDividerPositions(0.15)
 		}
-
-		val savesButtonBox = HBox(10.0, newProjectButton, openProjectButton, saveProjectButton).apply {
-			padding = Insets(8.0)
-		}
-
-		val runButton = Button("Бег").apply {
-			setOnAction { runButtonHandler() }
-		}
-		val dataDocksButton = Button("DataDocs").apply {
-			setOnAction { }
-		}
-		val runButtonBox = HBox(10.0, runButton, dataDocksButton).apply {
-			padding = Insets(8.0)
-		}
-		val root = VBox(savesButtonBox, runButtonBox, scrollPane)
-
+		val menuBar = buildMenuBar(primaryStage)
+		val root = VBox(menuBar, splitPane)
 		// Горячие клавиши
 		val scene = Scene(root, windowW, windowH).apply {
 			setOnKeyPressed { event ->
@@ -208,17 +201,23 @@ class LayoutEditor : Application() {
 				// Ctrl+S для сохранения
 				if (event.isControlDown && event.code == KeyCode.S) {
 					if (currentProjectFile != null) {
-						exportBlocksToFile(currentProjectFile!!)
+						saveToFile(currentProjectFile!!)
 					} else {
-						val fileChooser = FileChooser()
-						fileChooser.title = "Сохранить проект"
-						fileChooser.extensionFilters.add(FileChooser.ExtensionFilter("JSON Files", "*.json"))
+						val fileChooser = FileChooser().apply {
+							title = "Сохранить проект"
+							extensionFilters.add(FileChooser.ExtensionFilter("JSON Files", "*.json"))
+						}
 						val file = fileChooser.showSaveDialog(primaryStage)
 						if (file != null) {
-							exportBlocksToFile(file)
+							saveToFile(file)
 							currentProjectFile = file
 						}
 					}
+					event.consume()
+				}
+				// Ctrl+O для открытия
+				if (event.isControlDown && event.code == KeyCode.O) {
+					openProject(primaryStage)
 					event.consume()
 				}
 			}
@@ -233,11 +232,164 @@ class LayoutEditor : Application() {
 				}
 			}
 		}
-		primaryStage.title = currentProjectFile?.name ?: "Low code processes executor"
+		primaryStage.title = currentProjectFile?.name ?: "rCRIF B)"
 		primaryStage.show()
 		setupContextMenu()
 		contentPane.requestFocus()
 	}
+
+
+	private fun buildMenuBar(primaryStage: Stage): MenuBar {
+		val fileMenu = Menu("Файл")
+		val openItem = MenuItem("Открыть проект…").apply {
+			accelerator = KeyCombination.keyCombination("Ctrl+O")
+			setOnAction { openProject(primaryStage) }
+		}
+		val saveItem = MenuItem("Сохранить").apply {
+			accelerator = KeyCombination.keyCombination("Ctrl+S")
+			setOnAction { saveProject(primaryStage) }
+		}
+		val exitItem = MenuItem("Выход").apply {
+			accelerator = KeyCombination.keyCombination("Ctrl+Q")
+			setOnAction { Platform.exit() }
+		}
+		fileMenu.items.addAll(
+			openItem,
+			saveItem,
+			SeparatorMenuItem(),
+			exitItem
+		)
+		return MenuBar().apply { menus.add(fileMenu) }
+	}
+
+
+	private fun openProject(primaryStage: Stage) {
+		val dirChooser = DirectoryChooser().apply { title = "Выбрать папку проекта" }
+		val projectDir = dirChooser.showDialog(primaryStage) ?: return
+		val proceduresDir = File(projectDir, "Procedures")
+		val mainFlowDir = File(projectDir, "MainFlow")
+		val rootItem = TreeItem(projectDir).apply { isExpanded = true }
+		if (proceduresDir.exists() && proceduresDir.isDirectory) {
+			rootItem.children.add(
+				createNode(proceduresDir).apply { isExpanded = true }
+			)
+		}
+		if (mainFlowDir.exists() && mainFlowDir.isDirectory) {
+			rootItem.children.add(
+				createNode(mainFlowDir).apply { isExpanded = true }
+			)
+		}
+		fileTreeView.root = rootItem
+		fileTreeView.isShowRoot = false
+		currentProjectFile = projectDir
+		primaryStage.title = projectDir.name
+	}
+
+
+	private fun saveProject(stage: Stage) {
+		if (currentProjectFile != null && currentProjectFile!!.extension.equals("json", true)) {
+			saveToFile(currentProjectFile!!)
+		}
+	}
+
+
+	private fun createNode(file: File): TreeItem<File> {
+		val node = TreeItem(file)
+		if (file.isDirectory) {
+			file.listFiles()?.filter { it.isDirectory }?.forEach { child ->
+				node.children.add(createNode(child))
+			}
+		}
+		return node
+	}
+
+
+	private fun importLayoutFromXml(file: File) {
+		// 1. очищаем сцену
+		blocks.clear()
+		connections.clear()
+		workspaceGroup.children.clear()
+
+		// 2. читаем XML
+		val doc = DocumentBuilderFactory.newInstance()
+			.newDocumentBuilder()
+			.parse(file)
+			.also { it.documentElement.normalize() }
+
+		// 3. создаём блоки
+		val uidToBlock = mutableMapOf<String, BlockNode>()
+		val elements = doc.getElementsByTagName("DiagramElement")
+		for (i in 0 until elements.length) {
+			val el = elements.item(i) as Element
+			val uid  = el.getAttribute("UID")
+			val x    = el.getSingleChild("X").textContent.toDouble()
+			val y    = el.getSingleChild("Y").textContent.toDouble()
+			val ref  = el.getSingleChild("Reference").textContent
+			val w    = el.getSingleChild("Width").textContent.toDouble()
+			val h    = el.getSingleChild("Height").textContent.toDouble()
+
+			val type = BlockType.entries.firstOrNull { ref.startsWith(it.name, true) }
+				?: BlockType.MAPPING
+
+			val block = BlockNode(x, y, ref, type).apply {
+				prefWidth  = w
+				prefHeight = h
+			}
+			blocks.add(block)
+			workspaceGroup.children.add(block)
+			uidToBlock[uid] = block
+		}
+
+		// 4. создаём соединения
+		val connNodes = doc.getElementsByTagName("DiagramConnection")
+		for (i in 0 until connNodes.length) {
+			val connEl = connNodes.item(i) as Element
+			val ends = connEl.getElementsByTagName("DiagramEndPoint")
+			if (ends.length != 2) continue
+
+			val from = uidToBlock[(ends.item(0) as Element).getAttribute("ElementRef")] ?: continue
+			val to   = uidToBlock[(ends.item(1) as Element).getAttribute("ElementRef")] ?: continue
+
+			// --- читаем все DiagramSplit ---
+			val splitPts = buildList<Pair<Double, Double>> {
+				val splits = connEl.getElementsByTagName("DiagramSplit")
+				for (j in 0 until splits.length) {
+					val s = splits.item(j) as Element
+					val x = s.getSingleChild("X").textContent.toDouble()
+					val y = s.getSingleChild("Y").textContent.toDouble()
+					add(x to y)
+				}
+			}
+
+			val conn = OrthogonalConnection(from, to, contentPane, 0, 0, splitPts)
+			from.connectedLines.add(conn); to.connectedLines.add(conn); connections.add(conn)
+		}
+
+
+		// 5. расширяем рабочую область и фокусируем её
+		updateWorkspaceSize()
+		contentPane.requestFocus()
+	}
+
+
+	private fun Element.getSingleChild(tag: String): Element =
+		getElementsByTagName(tag).item(0) as Element
+
+
+	private fun updateWorkspaceSize(margin: Double = 200.0) {
+		if (blocks.isEmpty()) return
+		var maxX = 0.0
+		var maxY = 0.0
+		blocks.forEach { b ->
+			val w = b.layoutBounds.width
+			val h = b.layoutBounds.height
+			maxX = maxOf(maxX, b.layoutX + w)
+			maxY = maxOf(maxY, b.layoutY + h)
+		}
+		contentPane.prefWidth = maxX + margin
+		contentPane.prefHeight = maxY + margin
+	}
+
 
 	fun selectBlock(block: BlockNode?) {
 		blocks.forEach { it.selected = false }
@@ -247,13 +399,15 @@ class LayoutEditor : Application() {
 		selectedConnection = null
 	}
 
-	private fun selectConnection(conn: Connection?) {
+
+	fun selectConnection(conn: OrthogonalConnection?) {
 		connections.forEach { it.selected = false }
 		blocks.forEach { it.selected = false }
 		selectedConnection = conn
 		conn?.selected = true
 		selectedBlock = null
 	}
+
 
 	fun deleteBlockRequest(block: BlockNode) {
 		val toRemove = connections.filter { it.from == block || it.to == block }
@@ -268,6 +422,7 @@ class LayoutEditor : Application() {
 		selectedBlock = null
 	}
 
+
 	private fun addBlock(parent: Pane, x: Double, y: Double, name: String, blockType: BlockType) {
 		val block = BlockNode(x, y, name, blockType)
 		blocks.add(block)
@@ -278,8 +433,7 @@ class LayoutEditor : Application() {
 
 
 	// --- Сериализация и загрузка ---
-
-	private fun exportBlocksToFile(file: File) {
+	private fun saveToFile(file: File) {
 		currentProjectFile = file
 		val blocksData = BlocksData(blocks.map { it.toSerialized() }, connections.map { it.toSerialized() })
 		file.writeText(ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(blocksData))
@@ -383,18 +537,24 @@ class LayoutEditor : Application() {
 							}
 						if (toBlockPair != null && paneCoords != null) {
 							val (toBlock, _, inputIdx) = toBlockPair
-							val (startX, startY) = draggingFromBlock!!.outputPoint(draggingFromOutputIndex!!)
-							val (endX, endY) = toBlock.inputPoint(inputIdx)
-							draggingLine!!.startX = startX
-							draggingLine!!.startY = startY
-							draggingLine!!.endX = endX
-							draggingLine!!.endY = endY
-							val conn = Connection(
-								draggingFromBlock!!, toBlock, draggingLine!!, draggingFromOutputIndex!!, inputIdx
+
+							// убираем временную линию предпросмотра
+							contentPane.children?.remove(draggingLine)
+
+							// создаём ортогональное соединение: host = contentPane
+							val conn = OrthogonalConnection(
+								draggingFromBlock!!,        // from-блок
+								toBlock,                    // to-блок
+								contentPane,                // <-- правильный Pane-хост
+								draggingFromOutputIndex!!,  // номер выходного порта
+								inputIdx                    // номер входного порта
 							)
+
 							connections.add(conn)
 							draggingFromBlock!!.connectedLines.add(conn)
 							toBlock.connectedLines.add(conn)
+
+							// обработчик клика по линии (оставляем без изменений)
 							conn.line.onMouseClicked = EventHandler { onMouseEvent ->
 								if (onMouseEvent.button == MouseButton.PRIMARY) {
 									selectConnection(conn)
@@ -402,9 +562,11 @@ class LayoutEditor : Application() {
 									onMouseEvent.consume()
 								}
 							}
+
 							draggingLine = null
 							draggingFromOutputIndex = null
 						} else {
+							// к цели не попали — удаляем временную линию
 							contentPane.children?.remove(draggingLine)
 							draggingLine = null
 							draggingFromOutputIndex = null
@@ -415,31 +577,36 @@ class LayoutEditor : Application() {
 			}
 		}
 
-		// Восстановление соединений
+		/// ───────── восстановление соединений ─────────
 		data.connections.forEach { c ->
 			val fromBlock = idToBlock[c.fromId] ?: return@forEach
-			val toBlock = idToBlock[c.toId] ?: return@forEach
-			val outIdx = c.fromOutputIndex
-			val inIdx = c.toInputIndex
-			val (startX, startY) = fromBlock.outputPoint(outIdx)
-			val (endX, endY) = toBlock.inputPoint(inIdx)
-			val line = Line(startX, startY, endX, endY).apply {
-				stroke = Color.BLUE
-				strokeWidth = 2.0
-			}
-			val conn = Connection(fromBlock, toBlock, line, outIdx, inIdx)
+			val toBlock   = idToBlock[c.toId]   ?: return@forEach
+			val outIdx    = c.fromOutputIndex
+			val inIdx     = c.toInputIndex
+
+			// создаём ортогональное соединение
+			val conn = OrthogonalConnection(
+				fromBlock,
+				toBlock,
+				contentPane,
+				outIdx,
+				inIdx
+			)
+
 			connections.add(conn)
 			fromBlock.connectedLines.add(conn)
 			toBlock.connectedLines.add(conn)
-			line.onMouseClicked = EventHandler { event ->
-				if (event.button == MouseButton.PRIMARY) {
+
+			// обработчик клика вешаем на всю группу
+			conn.setOnMouseClicked { e ->
+				if (e.button == MouseButton.PRIMARY) {
 					selectConnection(conn)
-					(line.parent as? Pane)?.requestFocus()
-					event.consume()
+					contentPane.requestFocus()
+					e.consume()
 				}
 			}
-			(scrollPane.content as? Pane)?.children?.add(line)
 		}
+
 	}
 
 
@@ -523,6 +690,7 @@ class LayoutEditor : Application() {
 		gc.lineWidth = 1.0 // возвращаем обратно
 	}
 
+
 	// для gridCanvas и contentPane
 	private fun setupContextMenu() {
 		val showMenuHandler = EventHandler<MouseEvent> { event ->
@@ -585,224 +753,40 @@ class LayoutEditor : Application() {
 						val dy = panePoint.y - paneCoords.y
 						Math.hypot(dx, dy) <= inputCircle.radius + 4
 					}
+					// успешное попадание в input-кружок
 					if (toBlockPair != null && paneCoords != null) {
 						val (toBlock, _, inputIdx) = toBlockPair
-						val (startX, startY) = draggingFromBlock!!.outputPoint(draggingFromOutputIndex!!)
-						val (endX, endY) = toBlock.inputPoint(inputIdx)
-						draggingLine!!.startX = startX
-						draggingLine!!.startY = startY
-						draggingLine!!.endX = endX
-						draggingLine!!.endY = endY
-						val conn = Connection(
-							draggingFromBlock!!, toBlock, draggingLine!!, draggingFromOutputIndex!!, inputIdx
+						contentPane.children.remove(draggingLine)
+						val conn = OrthogonalConnection(
+							draggingFromBlock!!,        // исходный блок
+							toBlock,                    // целевой блок
+							contentPane,                // <-- правильный host-Pane
+							draggingFromOutputIndex!!,  // номер выходного порта
+							inputIdx                    // номер входного порта
 						)
 						connections.add(conn)
 						draggingFromBlock!!.connectedLines.add(conn)
 						toBlock.connectedLines.add(conn)
-
-						conn.line.onMouseClicked = EventHandler { onMouseEvent ->
-							if (onMouseEvent.button == MouseButton.PRIMARY) {
+						conn.setOnMouseClicked { e ->
+							if (e.button == MouseButton.PRIMARY) {
 								selectConnection(conn)
-								(conn.line.parent as? Pane)?.requestFocus()
-								onMouseEvent.consume()
+								contentPane.requestFocus()
+								e.consume()
 							}
 						}
 						draggingLine = null
 						draggingFromOutputIndex = null
 					} else {
-						contentPane.children?.remove(draggingLine)
+						contentPane.children.remove(draggingLine)
 						draggingLine = null
 						draggingFromOutputIndex = null
 					}
+
 					event.consume()
 				}
 			}
 		}
 	}
-
-
-	private fun runButtonHandler() {
-		val incoming = mutableMapOf<BlockNode, MutableSet<BlockNode>>()
-		val outgoing = mutableMapOf<BlockNode, MutableList<BlockNode>>()
-		blocks.forEach {
-			incoming[it] = mutableSetOf()
-		}
-		connections.forEach { conn ->
-			incoming[conn.to]?.add(conn.from)
-			outgoing.computeIfAbsent(conn.from) { mutableListOf() }.add(conn.to)
-		}
-		val finished = mutableSetOf<BlockNode>()
-		// Найти цикл (если есть)
-		val cycle = findFirstCycle()
-		val cycleSet = cycle?.toSet() ?: emptySet()
-
-		// Функция для стандартного обхода (без циклов)
-		fun runBlockRecursively(block: BlockNode) {
-			if (incoming[block]?.all { it in finished } != true) {
-				return
-			}
-			Platform.runLater { block.selected = true }
-//			runBlock(block)
-			Platform.runLater { block.selected = false }
-			finished.add(block)
-			outgoing[block]?.forEach { child ->
-				if (child !in cycleSet) {
-					runBlockRecursively(child)
-				}
-			}
-		}
-
-		// Запускать только те, которые не входят в цикл
-		blocks.filter {
-			it !in cycleSet && incoming[it]?.all { p -> p !in cycleSet } == true
-		}.forEach {
-			runBlockRecursively(it)
-		}
-		// Если есть цикл — обходить его N раз
-		if (!cycle.isNullOrEmpty()) {
-			while (true) {
-				if (cycle.all { block ->
-						val pairs = block.connectedLines
-							.filter { it.to != block }
-							.filter { it.to in cycle }
-							.map { Pair(it.to, it.from) }
-						pairs.all { p ->
-							val to = p.first
-							val from = p.second
-							val list = List(to.connectedLines.filter { it.to == from }.size) { index -> index }
-							to.outputsData.filterIndexed { index, _ -> index in list }.all { it.isEmpty() }
-						}
-					}) {
-					break
-				}
-				for (block in cycle) {
-					Platform.runLater { block.executing = true }
-//					runBlock(block)
-					Platform.runLater { block.executing = false }
-				}
-			}
-		}
-	}
-
-
-//	private fun runBlock(block: BlockNode) {
-//		block.outputsData = mutableListOf()
-//		when (block.blockType) {
-//			BlockType.MAPPING_GROOVY -> {
-//				val inputDataMap = HashMap<String, Any>()
-//				block.connectedLines.filter {
-//					it.to == block
-//				}.forEachIndexed { index: Int, connection: Connection ->
-//					inputDataMap[block.inputNames[index]] = connection.from.outputsData[connection.fromPort]
-//				}
-//				val outputs = (0 until block.outputCount)
-//					.associate { index -> block.outputNames[index] to mutableMapOf<String, Any>() }
-//					.toMutableMap()
-//				inputDataMap.putAll(outputs)
-//				try {
-//					block.code.runGroovyScript(inputDataMap)
-//				} catch (e: Exception) {
-//					System.err.println(e.localizedMessage)
-//					Platform.runLater {
-//						Alert(Alert.AlertType.ERROR).apply {
-//							title = block.name
-//							contentText = e.localizedMessage
-//							showAndWait()
-//						}
-//					}
-//				}
-//				outputs.forEach { (_, value) ->
-//					block.outputsData.add(value)
-//				}
-//			}
-//
-//			BlockType.MAPPING_PYTHON -> {
-//				val inputDataMap = HashMap<String, Any>()
-//				block.connectedLines.filter {
-//					it.to == block
-//				}.forEachIndexed { index: Int, connection: Connection ->
-//					inputDataMap[block.inputNames[index]] = connection.from.outputsData[connection.fromPort]
-//				}
-//				val outputs = (0 until block.outputCount)
-//					.associate { index -> block.outputNames[index] to mutableMapOf<String, Any>() }
-//					.toMutableMap()
-//				inputDataMap.putAll(outputs)
-//				try {
-//					val pyOutputs: Map<String, Any?> = block.code.runPythonScript(block, inputDataMap, outputs)
-//					block.outputNames.forEach { name ->
-//						block.outputsData.add(pyOutputs[name] as? MutableMap<String, Any> ?: mutableMapOf())
-//					}
-//				} catch (e: Exception) {
-//					System.err.println(e.localizedMessage)
-//					Platform.runLater {
-//						Alert(Alert.AlertType.ERROR).apply {
-//							title = "Ошибка"
-//							contentText = e.localizedMessage
-//							showAndWait()
-//						}
-//					}
-//				}
-//				outputs.forEach { (_, value) ->
-//					block.outputsData.add(value)
-//				}
-//			}
-//
-//			BlockType.MAPPING_JAVA_SCRIPT -> {
-//				val inputDataMap = HashMap<String, Any>()
-//				block.connectedLines.filter {
-//					it.to == block
-//				}.forEachIndexed { index: Int, connection: Connection ->
-//					inputDataMap[block.inputNames[index]] = connection.from.outputsData[connection.fromPort]
-//				}
-//				val outputs = (0 until block.outputCount)
-//					.associate { index -> block.outputNames[index] to mutableMapOf<String, Any>() }
-//					.toMutableMap()
-//				inputDataMap.putAll(outputs)
-//				try {
-//					block.code.runJavaScript(inputDataMap)
-//				} catch (e: Exception) {
-//					System.err.println(e.localizedMessage)
-//					Platform.runLater {
-//						Alert(Alert.AlertType.ERROR).apply {
-//							title = "Ошибка"
-//							contentText = e.localizedMessage
-//							showAndWait()
-//						}
-//					}
-//				}
-//				outputs.forEach { (_, value) ->
-//					block.outputsData.add(value)
-//				}
-//			}
-//
-//			BlockType.CONNECTOR -> {
-//				Platform.runLater {
-//					Alert(Alert.AlertType.ERROR).apply {
-//						title = "CONNECTOR еще не поддерживается :("
-//						contentText = "CONNECTOR еще не поддерживается :("
-//						showAndWait()
-//					}
-//				}
-//			}
-//
-//			BlockType.INPUT_DATA, BlockType.START -> {
-//				block.outputsData.add(
-//					try {
-//						when (block.inputFormat) {
-//							InputFormatType.JSON -> ObjectMapper().readValue<MutableMap<String, Any>>(block.code)
-//							InputFormatType.XML -> XmlMapper().readValue<MutableMap<String, Any>>(block.code)
-//							InputFormatType.YAML -> Yaml().load(block.code)
-//							InputFormatType.PROTOBUF -> TODO()
-//						}
-//					} catch (e: Exception) {
-//						mutableMapOf()
-//					}
-//				)
-//			}
-//
-//			BlockType.EXIT -> {}
-//		}
-//	}
 
 
 	private fun ensureBlockVisible(block: BlockNode, margin: Double = 80.0, extendStep: Double = 200.0) {
@@ -851,110 +835,6 @@ class LayoutEditor : Application() {
 			gridCanvas.heightProperty().bind(contentPane.heightProperty())
 			drawGrid(gridCanvas)
 		}
-	}
-
-
-	private fun findFirstCycle(): List<BlockNode>? {
-		val visited = mutableSetOf<BlockNode>()
-		val stack = mutableListOf<BlockNode>()
-		fun dfs(current: BlockNode): List<BlockNode>? {
-			if (current in stack) {
-				val idx = stack.indexOf(current)
-				return stack.subList(idx, stack.size).toList()
-			}
-			if (current in visited) return null
-			visited.add(current)
-			stack.add(current)
-			val nextBlocks = connections.filter { it.from == current }.map { it.to }
-			for (next in nextBlocks) {
-				val result = dfs(next)
-				if (result != null) return result
-			}
-			stack.removeAt(stack.size - 1)
-			return null
-		}
-		for (block in blocks) {
-			stack.clear()
-			val cycle = dfs(block)
-			if (!cycle.isNullOrEmpty()) return cycle
-		}
-		return null
-	}
-
-
-	private fun String.runGroovyScript(bindings: Map<String, Any?> = emptyMap()): Any? {
-		val shell = GroovyShell()
-		val binding = shell.context
-		for ((k, v) in bindings) {
-			binding.setProperty(k, v)
-		}
-		return shell.evaluate(this)
-	}
-
-
-	private fun String.runJavaScript(bindings: Map<String, Any?> = emptyMap()): Any? {
-		val engine = ScriptEngineManager().getEngineByName("JavaScript")
-		val scriptBindings = engine.createBindings()
-		for ((k, v) in bindings) {
-			scriptBindings[k] = v
-		}
-		return engine.eval(this, scriptBindings)
-	}
-
-
-	fun String.runPythonScript(
-		block: BlockNode,
-		bindings: Map<String, Any?> = emptyMap(),
-		outputs: MutableMap<String, MutableMap<String, Any>>
-	): Map<String, Any?> {
-		val venvDir = "./run/python/${block.serializedId}_${block.hashCode()}"
-		ProcessBuilder("python3", "-m", "venv", venvDir)
-			.redirectErrorStream(true)
-			.start()
-			.waitFor()
-		val isWindows = System.getProperty("os.name").startsWith("Windows")
-		val pipPath = if (isWindows) {
-			"${venvDir}/Scripts/pip.exe"
-		} else {
-			"${venvDir}/bin/pip"
-		}
-		if (block.packagesNames.isNotEmpty()) {
-			val pipProc = ProcessBuilder(pipPath, "install", *block.packagesNames.toTypedArray())
-				.redirectErrorStream(true)
-				.start()
-			pipProc.waitFor()
-		}
-		val pythonPath = if (isWindows) {
-			"$venvDir/Scripts/python.exe"
-		} else {
-			"$venvDir/bin/python"
-		}
-		val paramsJson = ObjectMapper().writeValueAsString(bindings)
-		val fullScript = """
-				|import os, json
-				|params = json.loads(os.environ.get("PARAMS_JSON", "{}"))
-				|locals().update(params)
-				|
-				|${this}
-				|
-				|print(json.dumps({${outputs.map { "\"${it.key}\": ${it.key}" }.joinToString(", ")}}))
-				""".trimMargin()
-		val pythonProc = ProcessBuilder(pythonPath, "-c", fullScript)
-			.redirectErrorStream(true)
-			.apply { environment()["PARAMS_JSON"] = paramsJson }
-			.start()
-		val readText = pythonProc.inputStream.bufferedReader().readText()
-		File(venvDir).deleteRecursively()
-		val lastLine = readText.lines().lastOrNull { it.trim().startsWith("{") && it.trim().endsWith("}") }
-		val result: Map<String, Any?> = if (lastLine != null) {
-			ObjectMapper().readValue(lastLine)
-		} else {
-			if (readText.startsWith("Traceback")) {
-				throw RuntimeException(readText)
-			}
-			emptyMap()
-		}
-		return result
 	}
 
 

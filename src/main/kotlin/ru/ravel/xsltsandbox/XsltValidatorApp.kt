@@ -40,9 +40,8 @@ import javax.xml.transform.stream.StreamResult
 import javax.xml.transform.stream.StreamSource
 
 
-private const val isOpenedInEditorMode: Boolean = true
-
 class XsltValidatorApp(
+	private val isOpenedInEditorMode: Boolean = true,
 	private val configPath: Path = Paths.get(System.getenv("APPDATA"), "xslt-sandbox", "config.json"),
 ) : Application() {
 
@@ -803,10 +802,5 @@ class XsltValidatorApp(
 					"|(?<BRACKET>/?>)"
 		)
 
-
-		@JvmStatic
-		fun main(args: Array<String>) {
-			launch(XsltValidatorApp::class.java)
-		}
 	}
 }
