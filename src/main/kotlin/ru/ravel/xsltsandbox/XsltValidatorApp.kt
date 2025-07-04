@@ -41,7 +41,7 @@ import javax.xml.transform.stream.StreamSource
 
 
 class XsltValidatorApp(
-	private val isOpenedInEditorMode: Boolean = true,
+	private val isOpenedInEditorMode: Boolean = false,
 	private val configPath: Path = Paths.get(System.getenv("APPDATA"), "xslt-sandbox", "config.json"),
 ) : Application() {
 

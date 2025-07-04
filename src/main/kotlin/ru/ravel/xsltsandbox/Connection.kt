@@ -1,16 +1,16 @@
-/*
 package ru.ravel.xsltsandbox
 
 import javafx.scene.paint.Color
-import javafx.scene.shape.Line
+import javafx.scene.shape.Polyline
 import ru.ravel.xsltsandbox.model.ConnectionSerialized
 
 class Connection(
 	val from: BlockNode,
 	val to: BlockNode,
-	val line: Line,
-	val fromPort: Int = 0, // Индекс выхода
-	val toPort: Int = 0    // Индекс входа
+	val line: Polyline,
+	val fromPort: Int = 0,
+	val toPort: Int = 0,
+	val splitPts: List<Pair<Double, Double>> = emptyList()
 ) {
 	var selected: Boolean = false
 		set(value) {
@@ -19,19 +19,25 @@ class Connection(
 				line.stroke = Color.RED
 				line.strokeWidth = 4.0
 			} else {
-				line.stroke = Color.BLUE
-				line.strokeWidth = 2.0
+				line.stroke = Color.GRAY
+				line.strokeWidth = 4.0
 			}
 		}
 
+
 	fun updateLine() {
-		val (startX, startY) = from.outputPoint(fromPort)
-		val (endX, endY) = to.inputPoint(toPort)
-		line.startX = startX
-		line.startY = startY
-		line.endX = endX
-		line.endY = endY
+		val (sx, sy) = from.outputPoint(fromPort)
+		val (ex, ey) = to.inputPoint(toPort)
+		val pts = mutableListOf<Double>().apply {
+			add(sx)
+			add(sy)
+			splitPts.forEach { (x, y) -> add(x); add(y) }
+			add(ex)
+			add(ey)
+		}
+		line.points.setAll(pts)
 	}
+
 
 	fun toSerialized(): ConnectionSerialized = ConnectionSerialized(
 		fromId = from.serializedId,
@@ -41,4 +47,3 @@ class Connection(
 	)
 
 }
-*/

@@ -1,14 +1,15 @@
 package ru.ravel.xsltsandbox
 
-import com.fasterxml.jackson.dataformat.xml.XmlMapper
+import javafx.beans.binding.Bindings
 import javafx.event.EventHandler
 import javafx.geometry.Insets
+import javafx.geometry.Point2D
 import javafx.geometry.Pos
+import javafx.scene.Node
 import javafx.scene.Scene
 import javafx.scene.control.*
-import javafx.scene.input.Clipboard
-import javafx.scene.input.ClipboardContent
 import javafx.scene.input.MouseButton
+import javafx.scene.input.MouseEvent
 import javafx.scene.layout.HBox
 import javafx.scene.layout.Pane
 import javafx.scene.layout.VBox
@@ -22,7 +23,7 @@ import javafx.stage.Stage
 import ru.ravel.xsltsandbox.model.BlockSerialized
 import ru.ravel.xsltsandbox.model.BlockType
 import ru.ravel.xsltsandbox.model.InputFormatType
-import java.util.UUID
+import java.util.*
 import kotlin.math.roundToInt
 
 
@@ -44,13 +45,43 @@ class BlockNode(
 	var packagesNames: MutableList<String> = mutableListOf(),
 ) : Pane() {
 
-	private val width = 150.0
-	private val height = 40.0
-	private val rect = Rectangle(width, height)
-	private val label = Text(name)
+
+	companion object {
+		private const val BLOCK_W = 100.0
+		private const val BLOCK_H = 100.0
+		private const val CIRCLE_R = 9.0
+		private const val LABEL_MARGIN = 4.0
+	}
+
+	private val rect = Rectangle().apply {
+		widthProperty().bind(prefWidthProperty())
+		heightProperty().bind(prefHeightProperty())
+		arcWidth = 14.0
+		arcHeight = 14.0
+		fill = blockType.color
+		stroke = Color.DARKGRAY
+		strokeWidth = 4.0
+	}
+	private val label = Text(name).apply {
+		font = Font(14.0)
+		layoutXProperty().bind(
+			Bindings.createDoubleBinding(
+				{ (rect.width - layoutBounds.width) / 2 },
+				rect.widthProperty(),
+				layoutBoundsProperty()
+			)
+		)
+		layoutYProperty().bind(
+			Bindings.createDoubleBinding(
+				{ rect.height + 5.0 + layoutBounds.height },
+				rect.heightProperty(),
+				layoutBoundsProperty()
+			)
+		)
+	}
 	val inputCircles = mutableListOf<Circle>()
 	val outputCircles = mutableListOf<Circle>()
-	val connectedLines = mutableListOf<OrthogonalConnection>()
+	val connectedLines = mutableListOf<Connection>()
 	private var dragOffsetX = 0.0
 	private var dragOffsetY = 0.0
 	var onMove: (() -> Unit)? = null
@@ -67,30 +98,38 @@ class BlockNode(
 			rect.strokeWidth = if (value) 4.0 else 2.0
 		}
 
+
 	init {
+		setOnMouseDragged(::onBlockDragged)
 		layoutX = x
 		layoutY = y
 		rect.stroke = Color.BLACK
 		rect.fill = blockType.color
 
-		rect.arcWidth = 14.0
-		rect.arcHeight = 14.0
-		rect.stroke = Color.DARKGRAY
-		rect.strokeWidth = 2.0
+		// стилизуем прямоугольник
+		rect.apply {
+			arcWidth = 14.0
+			arcHeight = 14.0
+			fill = blockType.color
+			stroke = Color.DARKGRAY
+			strokeWidth = 4.0
+		}
 
-		label.font = Font(14.0)
-		label.x = 15.0
-		label.y = 30.0
-		label.text = name
+		// настраиваем текст
+		label.apply {
+			font = Font(14.0)
+			text = name
+		}
 
-		// --- добавление только один раз! ---
+		// создаём кружки ввода/вывода
 		children.add(rect)
 		children.add(label)
 
 		createIOCircles()
 
-		// Drag&Drop обработчики
-
+		// Drag & Drop обработчики на rect (и зеркально на label)
+		rect.onMousePressed = EventHandler { event -> onBlockPressed(event) }
+		rect.onMouseDragged = EventHandler { event -> onBlockDragged(event) }
 		rect.onMouseReleased = EventHandler { event ->
 			if (event.button == MouseButton.PRIMARY) {
 				snapToGrid()
@@ -156,9 +195,9 @@ class BlockNode(
 	}
 
 
-	private fun onBlockPressed(event: javafx.scene.input.MouseEvent) {
+	private fun onBlockPressed(event: MouseEvent) {
 		if (event.button == MouseButton.PRIMARY) {
-			val parentPane = parent as Pane
+			val parentPane = parent as Node
 			val mouseInPane = parentPane.sceneToLocal(event.sceneX, event.sceneY)
 			dragOffsetX = mouseInPane.x - layoutX
 			dragOffsetY = mouseInPane.y - layoutY
@@ -166,18 +205,22 @@ class BlockNode(
 		}
 	}
 
-	private fun onBlockDragged(event: javafx.scene.input.MouseEvent) {
+	private fun onBlockDragged(event: MouseEvent) {
 		if (event.button == MouseButton.PRIMARY) {
 			val parentPane = parent as Pane
 			val mouseInPane = parentPane.sceneToLocal(event.sceneX, event.sceneY)
 			layoutX = mouseInPane.x - dragOffsetX
 			layoutY = mouseInPane.y - dragOffsetY
 			updateConnectedLines()
+			parentPane.apply {
+				val b = layoutBounds
+				minWidth = b.maxX
+				minHeight = b.maxY
+			}
 			onMove?.invoke()
 			event.consume()
 		}
 	}
-
 
 	private fun showAlert(title: String, message: String) {
 		val alert = Alert(Alert.AlertType.INFORMATION)
@@ -199,7 +242,7 @@ class BlockNode(
 
 		if (blockType in arrayOf(BlockType.INPUT_DATA, BlockType.START)) {
 			// Форматы
-			val formats = InputFormatType.values()
+			val formats = InputFormatType.entries
 			val toggleGroup = ToggleGroup()
 			val radioButtons = formats.map { format ->
 				RadioButton(format.name).apply {
@@ -453,124 +496,60 @@ class BlockNode(
 	}
 
 	private fun createIOCircles() {
-		// Очищаем старые кружки
 		children.removeAll(inputCircles)
 		children.removeAll(outputCircles)
 		inputCircles.clear()
 		outputCircles.clear()
-
-		// --- обновляем высоту блока ---
-		val newHeight = computeBlockHeight()
-		rect.height = newHeight
-		this.prefHeight = newHeight
-
-		// Входы
+		val r = CIRCLE_R
 		if (blockType != BlockType.START && blockType != BlockType.INPUT_DATA) {
-			val step = newHeight / (inputCount + 1)
 			repeat(inputCount) { i ->
-				val y = step * (i + 1)
-				val circle = Circle(0.0, y, 7.0, Color.LIGHTSKYBLUE).apply {
+				val circle = Circle(r).apply {
+					centerX = 0.0
+					centerYProperty().bind(
+						rect.heightProperty()
+							.multiply(i + 1.0)
+							.divide(inputCount + 1.0)
+					)
 					stroke = Color.DARKBLUE
 					strokeWidth = 1.6
-					Tooltip.install(this, Tooltip(inputNames[i]))
+					fill = Color.LIGHTSKYBLUE
+					Tooltip.install(this, Tooltip(inputNames.getOrNull(i) ?: ""))
 				}
-				inputCircles.add(circle)
-				children.add(circle)
+				inputCircles += circle
+				children += circle
 			}
 		}
-		// Выходы
 		if (blockType != BlockType.EXIT) {
-			val step = newHeight / (outputCount + 1)
-			for (i in 0 until outputCount) {
-				val y = step * (i + 1)
-				val circle = Circle(rect.width, y, 7.0, Color.ORANGE).apply {
+			repeat(outputCount) { i ->
+				val circle = Circle(r).apply {
+					centerXProperty().bind(rect.widthProperty())
+					centerYProperty().bind(
+						rect.heightProperty()
+							.multiply(i + 1.0)
+							.divide(outputCount + 1.0)
+					)
 					stroke = Color.DARKRED
 					strokeWidth = 1.6
-					Tooltip.install(this, Tooltip(outputNames.getOrNull(i)))
+					fill = Color.ORANGE
+					Tooltip.install(this, Tooltip(outputNames.getOrNull(i) ?: ""))
 				}
-				circle.onMouseClicked = EventHandler { event ->
-					if (event.button == MouseButton.PRIMARY && event.clickCount == 1) {
-						showOutputData(i)
-						event.consume()
-					}
-				}
-				outputCircles.add(circle)
-				children.add(circle)
+				outputCircles += circle
+				children += circle
 			}
 		}
 	}
 
+	fun inputPoint(index: Int): Pair<Double, Double> =
+		Pair(
+			layoutX + inputCircles[index].centerX,
+			layoutY + inputCircles[index].centerY
+		)
 
-	private fun showOutputData(index: Int) {
-		val output = outputsData.getOrNull(index)
-		if (output == null) {
-			val alert = Alert(Alert.AlertType.INFORMATION, "Нет данных")
-			alert.showAndWait()
-			return
-		}
-		val dialog = Stage()
-		dialog.title = "Output $index"
-		val textArea = TextArea().apply {
-			isEditable = false
-			prefWidth = 480.0
-			prefHeight = 340.0
-			font = Font.font("monospace", 14.0)
-		}
-		val copyBtn = Button("Скопировать в буфер").apply {
-			setOnAction {
-				val clipboard = Clipboard.getSystemClipboard()
-				val content = ClipboardContent()
-				content.putString(textArea.text)
-				clipboard.setContent(content)
-			}
-		}
-		val formats = InputFormatType.values()
-		val toggleGroup = ToggleGroup()
-		val radioButtons = formats.map { format ->
-			RadioButton(format.name).apply {
-				this.toggleGroup = toggleGroup
-			}
-		}
-		radioButtons[0].isSelected = true
-		val hBox = HBox(12.0, *radioButtons.toTypedArray()).apply {
-			padding = Insets(6.0)
-		}
-
-		fun updateTextArea() {
-			val selected = formats[radioButtons.indexOfFirst { it.isSelected }]
-			val formatted = when (selected) {
-				InputFormatType.XML -> XmlMapper().writerWithDefaultPrettyPrinter().writeValueAsString(output)
-			}
-			textArea.text = formatted
-		}
-		radioButtons.forEach { btn ->
-			btn.setOnAction { updateTextArea() }
-		}
-		updateTextArea()
-		val vbox = VBox(10.0, hBox, textArea, copyBtn).apply {
-			padding = Insets(12.0)
-		}
-		dialog.scene = Scene(vbox)
-		dialog.show()
-	}
-
-	fun inputPoint(index: Int = 0): Pair<Double, Double> {
-		val circle = inputCircles.getOrNull(index) ?: inputCircles.firstOrNull()
-		return if (circle != null)
-			Pair(layoutX + circle.centerX, layoutY + circle.centerY)
-		else
-		// Для специальных блоков возвращаем левый край
-			Pair(layoutX, layoutY + height / 2)
-	}
-
-	fun outputPoint(index: Int = 0): Pair<Double, Double> {
-		val circle = outputCircles.getOrNull(index) ?: outputCircles.firstOrNull()
-		return if (circle != null)
-			Pair(layoutX + circle.centerX, layoutY + circle.centerY)
-		else
-		// Для специальных блоков возвращаем правый край
-			Pair(layoutX + width, layoutY + height / 2)
-	}
+	fun outputPoint(index: Int): Pair<Double, Double> =
+		Pair(
+			layoutX + outputCircles[index].centerX,
+			layoutY + outputCircles[index].centerY
+		)
 
 	fun updateConnectedLines() {
 		connectedLines.forEach { it.updateLine() }
@@ -607,7 +586,7 @@ class BlockNode(
 		for (i in 0 until outputCount) {
 			val circle = Circle(width - 10.0, 15.0 + i * 20, 9.0, Color.ORANGE).apply {
 				stroke = Color.DARKRED
-				strokeWidth = 2.0
+				strokeWidth = 4.0
 			}
 			outputCircles.add(circle)
 			children.add(circle)
@@ -636,28 +615,6 @@ class BlockNode(
 	}
 
 
-	private fun buildEditablePipBox(): VBox {
-		val pipBox = VBox(4.0)
-		val scrollContent = VBox(4.0)
-		val scrollPane = ScrollPane(scrollContent).apply {
-			prefHeight = 140.0
-			isFitToWidth = true
-			vbarPolicy = ScrollPane.ScrollBarPolicy.ALWAYS
-		}
-		val addBtn = Button("+").apply {
-			setOnAction { addPipRow(scrollContent) }
-		}
-		val header = HBox(6.0, Label("pip пакеты:"), addBtn)
-		pipBox.children.add(header)
-		pipBox.children.add(scrollPane)
-		if (packagesNames.isEmpty()) {
-			addPipRow(scrollContent)
-		} else {
-			packagesNames.forEach { addPipRow(scrollContent, it) }
-		}
-		return pipBox
-	}
-
 	private fun addPipRow(container: VBox, initialText: String = "") {
 		val tf = TextField(initialText)
 		lateinit var box: HBox
@@ -670,15 +627,6 @@ class BlockNode(
 		box.alignment = Pos.CENTER_LEFT
 		container.children.add(box)
 	}
-
-
-	private fun computeBlockHeight(): Double {
-		val count = maxOf(inputCount, outputCount)
-		val minHeight = 50.0
-		val step = 30.0
-		return maxOf(minHeight, step * (count + 1))
-	}
-
 
 	private fun snapToGrid(gridSize: Double = 10.0) {
 		layoutX = (layoutX / gridSize).roundToInt() * gridSize

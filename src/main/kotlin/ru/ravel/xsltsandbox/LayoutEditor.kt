@@ -5,66 +5,61 @@ import javafx.application.Application
 import javafx.application.Platform
 import javafx.event.EventHandler
 import javafx.geometry.Insets
-import javafx.scene.Group
 import javafx.scene.Scene
 import javafx.scene.canvas.Canvas
 import javafx.scene.control.*
 import javafx.scene.input.KeyCode
+import javafx.scene.input.KeyCombination
 import javafx.scene.input.MouseButton
 import javafx.scene.input.MouseEvent
 import javafx.scene.layout.Pane
+import javafx.scene.layout.Priority
 import javafx.scene.layout.VBox
 import javafx.scene.paint.Color
 import javafx.scene.shape.Circle
 import javafx.scene.shape.Line
+import javafx.scene.shape.Polyline
+import javafx.stage.DirectoryChooser
 import javafx.stage.FileChooser
 import javafx.stage.Stage
 import javafx.util.Callback
+import org.w3c.dom.Element
 import ru.ravel.xsltsandbox.model.BlockType
 import ru.ravel.xsltsandbox.model.BlocksData
 import ru.ravel.xsltsandbox.model.InputFormatType
 import java.io.File
 import java.util.*
-import javafx.stage.DirectoryChooser
-import javafx.scene.control.MenuBar
-import javafx.scene.control.Menu
-import javafx.scene.control.MenuItem
-import javafx.scene.input.KeyCombination
-import org.w3c.dom.Element
 import javax.xml.parsers.DocumentBuilderFactory
-import kotlin.math.hypot
 
 
 class LayoutEditor : Application() {
 	private var currentProjectFile: File? = null
 	private val blocks = mutableListOf<BlockNode>()
-	val connections = mutableListOf<OrthogonalConnection>()
-	private var draggingLine: Line? = null
+	val connections = mutableListOf<Connection>()
+	private var draggingLine: Polyline? = null
 	private var draggingFromBlock: BlockNode? = null
 	private var draggingFromOutputIndex: Int? = null
 	private var selectedBlock: BlockNode? = null
-	private var selectedConnection: OrthogonalConnection? = null
+	private var selectedConnection: Connection? = null
 	private var activeContextMenu: ContextMenu? = null
 	private val windowW = 800.0
 	private val windowH = 600.0
 	private val gridCanvas = Canvas(windowW, windowH)
-	private val workspaceGroup = Group()
+	private val workspaceGroup = Pane()
 	private val contentPane = Pane().apply {
-		children.setAll(gridCanvas, workspaceGroup)
-		prefWidth = windowW * 2
-		prefHeight = windowH * 2
+		children.addAll(gridCanvas, workspaceGroup)
 		padding = Insets(10.0)
 		isFocusTraversable = true
 	}
 	private val scrollPane = ScrollPane(contentPane).apply {
-		isPannable = false
+		isPannable = true
 		hbarPolicy = ScrollPane.ScrollBarPolicy.ALWAYS
 		vbarPolicy = ScrollPane.ScrollBarPolicy.ALWAYS
 	}
 	private var lastEnsureVisible = 0L
-	private val fileTreeView = TreeView<File>().apply {
+	private val fileTreeView: TreeView<File> = TreeView<File>().apply {
+		prefWidth = 150.0
 		isShowRoot = false
-		prefWidth = 250.0
 		cellFactory = Callback { _: TreeView<File> ->
 			object : TreeCell<File>() {
 				override fun updateItem(item: File?, empty: Boolean) {
@@ -84,17 +79,71 @@ class LayoutEditor : Application() {
 			}
 		}
 	}
+	private val treeScroll: ScrollPane = ScrollPane(fileTreeView).apply {
+		isFitToHeight = true
+		isFitToWidth = true
+		prefWidth = 150.0
+	}
+	private val workspaceScroll = ScrollPane(workspaceGroup).apply {}
 
 
 	override fun start(primaryStage: Stage) {
 		drawGrid(gridCanvas, 10.0)
-		gridCanvas.widthProperty().bind(contentPane.widthProperty())
-		gridCanvas.heightProperty().bind(contentPane.heightProperty())
+		gridCanvas.widthProperty().unbind()
+		gridCanvas.heightProperty().unbind()
 
-		gridCanvas.widthProperty().addListener { _, _, _ -> drawGrid(gridCanvas) }
-		gridCanvas.heightProperty().addListener { _, _, _ -> drawGrid(gridCanvas) }
+		fun resizeGrid() {
+			val vpH = scrollPane.viewportBounds.height
+			val contentH = contentPane.prefHeight
+			gridCanvas.height = maxOf(vpH, contentH)
+			drawGrid(gridCanvas)
+		}
+		resizeGrid()
+
+		scrollPane.viewportBoundsProperty().addListener { _, _, _ -> resizeGrid() }
+		contentPane.minWidthProperty().addListener { _, _, _ -> resizeGrid() }
+		contentPane.minHeightProperty().addListener { _, _, _ ->
+			val vp = scrollPane.viewportBounds
+			gridCanvas.height = maxOf(vp.height, contentPane.minHeight)
+			drawGrid(gridCanvas)
+		}
 
 		primaryStage.userData = this
+
+		contentPane.apply {
+			val b = layoutBounds
+			gridCanvas.width = b.width
+			gridCanvas.height = b.height
+			drawGrid(gridCanvas)
+		}
+
+		scrollPane.content = contentPane
+		contentPane.setOnContextMenuRequested { e ->
+			val picked = e.pickResult.intersectedNode
+			if (picked is BlockNode || picked is Circle) {
+				e.consume()
+				return@setOnContextMenuRequested
+			}
+			val menu = ContextMenu().apply {
+				BlockType.entries.forEach { type ->
+					items.add(MenuItem(type.displayName).apply {
+						setOnAction {
+							addBlock(e.x, e.y, type.displayName, type)
+						}
+					})
+				}
+			}
+			menu.show(contentPane, e.screenX, e.screenY)
+			activeContextMenu = menu
+			e.consume()
+		}
+		scrollPane.viewportBoundsProperty().addListener { _, _, vp ->
+			gridCanvas.widthProperty().unbind()
+			gridCanvas.heightProperty().unbind()
+			gridCanvas.width = vp.width
+			gridCanvas.height = vp.height
+			drawGrid(gridCanvas)
+		}
 
 		// ПАНОРАМИРОВАНИЕ мышью
 		var panLastX = 0.0
@@ -137,30 +186,21 @@ class LayoutEditor : Application() {
 		}
 
 		// Контекстное меню для создания блока
-		contentPane.onMouseClicked = EventHandler { event ->
-			if (event.button == MouseButton.SECONDARY && event.target === contentPane) {
-				val n = event.pickResult.intersectedNode
-				if (n is BlockNode || n is Circle) return@EventHandler // не показываем по блокам и кружкам
-				event.consume()
-				val contextMenu = ContextMenu()
+		workspaceGroup.setOnContextMenuRequested { e ->
+			val picked = e.pickResult.intersectedNode
+			if (picked is BlockNode || picked is Circle) return@setOnContextMenuRequested
+			val menu = ContextMenu().apply {
 				BlockType.entries.forEach { type ->
-					val item = MenuItem(type.displayName)
-					item.setOnAction {
-						addBlock(contentPane, event.x, event.y, type.displayName, type)
+					items += MenuItem(type.displayName).apply {
+						setOnAction {
+							addBlock(e.x, e.y, type.displayName, type)
+						}
 					}
-					contextMenu.items.add(item)
-				}
-				contextMenu.show(contentPane, event.screenX, event.screenY)
-				activeContextMenu = contextMenu
-				event.consume()
-			}
-			if (event.button == MouseButton.PRIMARY) {
-				if (event.target === contentPane) {
-					selectBlock(null)
-					selectConnection(null)
 				}
 			}
-			contentPane.requestFocus()
+			menu.show(workspaceGroup, e.screenX, e.screenY)
+			activeContextMenu = menu
+			e.consume()
 		}
 
 		val openProjectButton = Button("Открыть проект").apply {
@@ -178,9 +218,14 @@ class LayoutEditor : Application() {
 				}
 			}
 		}
-		val splitPane = SplitPane(fileTreeView, scrollPane).apply {
-			setDividerPositions(0.15)
+		val splitPane: SplitPane = SplitPane(treeScroll, scrollPane).apply {
+			SplitPane.setResizableWithParent(treeScroll, false)
+			Platform.runLater {
+				val total = width.takeIf { it > 0 } ?: this.scene.width
+				setDividerPositions(150.0 / total)
+			}
 		}
+		VBox.setVgrow(splitPane, Priority.ALWAYS)
 		val menuBar = buildMenuBar(primaryStage)
 		val root = VBox(menuBar, splitPane)
 		// Горячие клавиши
@@ -305,10 +350,11 @@ class LayoutEditor : Application() {
 
 
 	private fun importLayoutFromXml(file: File) {
-		// 1. очищаем сцену
+		// 1. очистка
+		contentPane.children.removeIf { it is BlockNode || it is Polyline }
+		workspaceGroup.children.removeIf { it is BlockNode || it is Polyline }
 		blocks.clear()
 		connections.clear()
-		workspaceGroup.children.clear()
 
 		// 2. читаем XML
 		val doc = DocumentBuilderFactory.newInstance()
@@ -316,57 +362,119 @@ class LayoutEditor : Application() {
 			.parse(file)
 			.also { it.documentElement.normalize() }
 
-		// 3. создаём блоки
+		// 3. создаём блоки и карту UID → BlockNode
 		val uidToBlock = mutableMapOf<String, BlockNode>()
-		val elements = doc.getElementsByTagName("DiagramElement")
-		for (i in 0 until elements.length) {
-			val el = elements.item(i) as Element
-			val uid  = el.getAttribute("UID")
-			val x    = el.getSingleChild("X").textContent.toDouble()
-			val y    = el.getSingleChild("Y").textContent.toDouble()
-			val ref  = el.getSingleChild("Reference").textContent
-			val w    = el.getSingleChild("Width").textContent.toDouble()
-			val h    = el.getSingleChild("Height").textContent.toDouble()
+		val elems = doc.getElementsByTagName("DiagramElement")
+		for (i in 0 until elems.length) {
+			val el = elems.item(i) as Element
+			val uid = el.getAttribute("UID")
+			// 3.1 читаем из XML координаты центра и размер
+			val xmlX = el.getSingleChild("X").textContent.toDouble()
+			val xmlY = el.getSingleChild("Y").textContent.toDouble()
+			val w = el.getSingleChild("Width").textContent.toDouble() * 0.8
+			val h = el.getSingleChild("Height").textContent.toDouble()
+			val ref = el.getSingleChild("Reference").textContent
 
-			val type = BlockType.entries.firstOrNull { ref.startsWith(it.name, true) }
+			// 3.2 выбираем тип блока
+			val type = BlockType.entries
+				.firstOrNull { ref.startsWith(it.name, ignoreCase = true) }
 				?: BlockType.MAPPING
 
-			val block = BlockNode(x, y, ref, type).apply {
-				prefWidth  = w
+			// 3.3 вычисляем положение левого-верхнего угла,
+			//     чтобы (xmlX, xmlY) оказался в центре блока
+			val topLeftX = xmlX - w / 2
+			val topLeftY = xmlY - h / 2
+
+			// 3.4 создаём и настраиваем блок
+			val block = BlockNode(
+				x = topLeftX,
+				y = topLeftY,
+				name = ref,
+				blockType = type
+			).apply {
+				onMove = this@LayoutEditor::updateContentSize
+				prefWidth = w
 				prefHeight = h
 			}
-			blocks.add(block)
-			workspaceGroup.children.add(block)
+
+			// 3.5 регистрируем
+			blocks += block
+			workspaceGroup.children += block
+			setupHandlersForBlock(block)
 			uidToBlock[uid] = block
 		}
 
-		// 4. создаём соединения
-		val connNodes = doc.getElementsByTagName("DiagramConnection")
-		for (i in 0 until connNodes.length) {
-			val connEl = connNodes.item(i) as Element
+		// 4. создаём соединения через Polyline
+		val connElems = doc.getElementsByTagName("DiagramConnection")
+		workspaceGroup.applyCss()
+		workspaceGroup.layout()
+		for (i in 0 until connElems.length) {
+			val connEl = connElems.item(i) as Element
 			val ends = connEl.getElementsByTagName("DiagramEndPoint")
 			if (ends.length != 2) continue
-
-			val from = uidToBlock[(ends.item(0) as Element).getAttribute("ElementRef")] ?: continue
-			val to   = uidToBlock[(ends.item(1) as Element).getAttribute("ElementRef")] ?: continue
-
-			// --- читаем все DiagramSplit ---
-			val splitPts = buildList<Pair<Double, Double>> {
+			val fromUid = (ends.item(0) as Element).getAttribute("ElementRef")
+			val toUid = (ends.item(1) as Element).getAttribute("ElementRef")
+			val from = uidToBlock[fromUid] ?: continue
+			val to = uidToBlock[toUid] ?: continue
+			val splitPts = buildList {
 				val splits = connEl.getElementsByTagName("DiagramSplit")
 				for (j in 0 until splits.length) {
-					val s = splits.item(j) as Element
-					val x = s.getSingleChild("X").textContent.toDouble()
-					val y = s.getSingleChild("Y").textContent.toDouble()
-					add(x to y)
+					val sp = splits.item(j) as Element
+					add(
+						sp.getSingleChild("X").textContent.toDouble() to sp.getSingleChild("Y").textContent.toDouble()
+					)
 				}
 			}
-
-			val conn = OrthogonalConnection(from, to, contentPane, 0, 0, splitPts)
-			from.connectedLines.add(conn); to.connectedLines.add(conn); connections.add(conn)
+			val startCircle = from.outputCircles[0]
+			val startScene = startCircle.localToScene(startCircle.centerX, startCircle.centerY)
+			val startLocal = workspaceGroup.sceneToLocal(startScene)
+			val endCircle = to.inputCircles[0]
+			val endScene = endCircle.localToScene(endCircle.centerX, endCircle.centerY)
+			val endLocal = workspaceGroup.sceneToLocal(endScene)
+			val coords = mutableListOf<Double>().apply {
+				add(startLocal.x)
+				add(startLocal.y)
+				splitPts.forEach { (x, y) ->
+					add(x)
+					add(y)
+				}
+				add(endLocal.x); add(endLocal.y)
+			}
+			val polyline = Polyline().apply {
+				points.addAll(coords)
+				strokeWidth = 4.0
+				stroke = Color.GRAY
+				setOnMouseClicked { e ->
+					if (e.button == MouseButton.PRIMARY) {
+						selectConnection(null)
+						val conn = Connection(
+							from = from,
+							to = to,
+							line = this,
+							fromPort = 0,
+							toPort = 0,
+							splitPts = splitPts
+						)
+						selectConnection(conn)
+						e.consume()
+					}
+				}
+			}
+			workspaceGroup.children.add(0, polyline)
+			val conn = Connection(
+				from = from,
+				to = to,
+				line = polyline,
+				fromPort = 0,
+				toPort = 0,
+				splitPts = splitPts
+			)
+			from.connectedLines += conn
+			to.connectedLines += conn
+			connections += conn
 		}
 
-
-		// 5. расширяем рабочую область и фокусируем её
+		// 5. обновляем область и фокус
 		updateWorkspaceSize()
 		contentPane.requestFocus()
 	}
@@ -400,7 +508,7 @@ class LayoutEditor : Application() {
 	}
 
 
-	fun selectConnection(conn: OrthogonalConnection?) {
+	fun selectConnection(conn: Connection?) {
 		connections.forEach { it.selected = false }
 		blocks.forEach { it.selected = false }
 		selectedConnection = conn
@@ -422,13 +530,18 @@ class LayoutEditor : Application() {
 		selectedBlock = null
 	}
 
-
-	private fun addBlock(parent: Pane, x: Double, y: Double, name: String, blockType: BlockType) {
-		val block = BlockNode(x, y, name, blockType)
-		blocks.add(block)
-		block.onMove = { ensureBlockVisible(block) }
-		parent.children.add(block)
+	private fun addBlock(x: Double, y: Double, name: String, blockType: BlockType) {
+		val block = BlockNode(x, y, name, blockType).apply {
+			layoutX = x
+			layoutY = y
+			prefWidth = DEFAULT_BLOCK_W
+			prefHeight = DEFAULT_BLOCK_H
+			onMove = this@LayoutEditor::updateContentSize
+		}
+		blocks += block
+		workspaceGroup.children += block
 		setupHandlersForBlock(block)
+		updateContentSize()
 	}
 
 
@@ -438,6 +551,7 @@ class LayoutEditor : Application() {
 		val blocksData = BlocksData(blocks.map { it.toSerialized() }, connections.map { it.toSerialized() })
 		file.writeText(ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(blocksData))
 	}
+
 
 	private fun importBlocksFromFile(file: File) {
 		currentProjectFile = file
@@ -482,7 +596,9 @@ class LayoutEditor : Application() {
 				outputNames = b.outputNames?.toMutableList() ?: mutableListOf(),
 				outputsData = b.outputsData ?: mutableListOf(),
 				packagesNames = b.packagesNames ?: mutableListOf(),
-			)
+			).apply {
+				onMove = this@LayoutEditor::updateContentSize
+			}
 			block.onMove = { ensureBlockVisible(block) }
 			blocks.add(block)
 			idToBlock[b.id] = block
@@ -493,9 +609,10 @@ class LayoutEditor : Application() {
 						selectBlock(block)
 						(scrollPane.content as? Pane)?.requestFocus()
 						val (startX, startY) = block.outputPoint(outIndex)
-						val line = Line(startX, startY, startX, startY).apply {
-							stroke = Color.BLUE
-							strokeWidth = 2.0
+						val line = Polyline().apply {
+							stroke = Color.GRAY
+							strokeWidth = 4.0
+							points.addAll(startX, startY, startX, startY)
 						}
 						(scrollPane.content as? Pane)?.children?.add(line)
 						draggingLine = line
@@ -506,107 +623,48 @@ class LayoutEditor : Application() {
 				}
 				outCircle.onMouseDragged = EventHandler { event ->
 					if (event.button == MouseButton.PRIMARY && draggingLine != null) {
-						val paneCoords = (scrollPane.content as? Pane)?.sceneToLocal(event.sceneX, event.sceneY)
+						val paneCoords = contentPane.sceneToLocal(event.sceneX, event.sceneY)
 						if (paneCoords != null) {
-							draggingLine!!.endX = paneCoords.x
-							draggingLine!!.endY = paneCoords.y
+							val pts = draggingLine!!.points
+							pts[pts.size - 2] = paneCoords.x
+							pts[pts.size - 1] = paneCoords.y
 						}
 						event.consume()
 					}
 				}
 				outCircle.onMouseReleased = EventHandler { event ->
-					if (event.button == MouseButton.PRIMARY && draggingLine != null) {
-						val paneCoords = contentPane.sceneToLocal(event.sceneX, event.sceneY)
-						val toBlockPair = blocks.asSequence()
-							.flatMap { other ->
-								other.inputCircles.mapIndexed { inputIdx, inputCircle ->
-									Triple(
-										other, inputCircle, inputIdx
-									)
-								}
-							}.find { (other, inputCircle, _) ->
-								if (other == draggingFromBlock) return@find false
-								val p = inputCircle.localToScene(inputCircle.centerX, inputCircle.centerY)
-								val panePoint = contentPane.sceneToLocal(p.x, p.y)
-								if (panePoint == null || paneCoords == null) {
-									return@find false
-								}
-								val dx = panePoint.x - paneCoords.x
-								val dy = panePoint.y - paneCoords.y
-								Math.hypot(dx, dy) <= inputCircle.radius + 4
-							}
-						if (toBlockPair != null && paneCoords != null) {
-							val (toBlock, _, inputIdx) = toBlockPair
-
-							// убираем временную линию предпросмотра
-							contentPane.children?.remove(draggingLine)
-
-							// создаём ортогональное соединение: host = contentPane
-							val conn = OrthogonalConnection(
-								draggingFromBlock!!,        // from-блок
-								toBlock,                    // to-блок
-								contentPane,                // <-- правильный Pane-хост
-								draggingFromOutputIndex!!,  // номер выходного порта
-								inputIdx                    // номер входного порта
-							)
-
-							connections.add(conn)
-							draggingFromBlock!!.connectedLines.add(conn)
-							toBlock.connectedLines.add(conn)
-
-							// обработчик клика по линии (оставляем без изменений)
-							conn.line.onMouseClicked = EventHandler { onMouseEvent ->
-								if (onMouseEvent.button == MouseButton.PRIMARY) {
-									selectConnection(conn)
-									(conn.line.parent as? Pane)?.requestFocus()
-									onMouseEvent.consume()
-								}
-							}
-
-							draggingLine = null
-							draggingFromOutputIndex = null
-						} else {
-							// к цели не попали — удаляем временную линию
-							contentPane.children?.remove(draggingLine)
-							draggingLine = null
-							draggingFromOutputIndex = null
-						}
-						event.consume()
-					}
+					completeLine(event)
 				}
 			}
 		}
 
-		/// ───────── восстановление соединений ─────────
+		// Восстановление соединений
 		data.connections.forEach { c ->
 			val fromBlock = idToBlock[c.fromId] ?: return@forEach
-			val toBlock   = idToBlock[c.toId]   ?: return@forEach
-			val outIdx    = c.fromOutputIndex
-			val inIdx     = c.toInputIndex
-
-			// создаём ортогональное соединение
-			val conn = OrthogonalConnection(
-				fromBlock,
-				toBlock,
-				contentPane,
-				outIdx,
-				inIdx
-			)
-
+			val toBlock = idToBlock[c.toId] ?: return@forEach
+			val outIdx = c.fromOutputIndex
+			val inIdx = c.toInputIndex
+			val (startX, startY) = fromBlock.outputPoint(outIdx)
+			val (endX, endY) = toBlock.inputPoint(inIdx)
+			// при загрузке из JSON тоже создаём Polyline
+			val polyline = Polyline().apply {
+				stroke = Color.GRAY
+				strokeWidth = 4.0
+				points.addAll(startX, startY, endX, endY)
+			}
+			val conn = Connection(fromBlock, toBlock, polyline, outIdx, inIdx)
 			connections.add(conn)
 			fromBlock.connectedLines.add(conn)
 			toBlock.connectedLines.add(conn)
-
-			// обработчик клика вешаем на всю группу
-			conn.setOnMouseClicked { e ->
-				if (e.button == MouseButton.PRIMARY) {
+			polyline.onMouseClicked = EventHandler { event ->
+				if (event.button == MouseButton.PRIMARY) {
 					selectConnection(conn)
-					contentPane.requestFocus()
-					e.consume()
+					(polyline.parent as? Pane)?.requestFocus()
+					event.consume()
 				}
 			}
+			(scrollPane.content as? Pane)?.children?.add(polyline)
 		}
-
 	}
 
 
@@ -614,19 +672,21 @@ class LayoutEditor : Application() {
 		draggingFromBlock = block
 		draggingFromOutputIndex = outputIndex
 		val (startX, startY) = block.outputPoint(outputIndex)
-		val line = Line(startX, startY, startX, startY).apply {
-			stroke = Color.BLUE
-			strokeWidth = 2.0
+		val line = Polyline().apply {
+			stroke = Color.GRAY
+			strokeWidth = 4.0
 		}
 		(scrollPane.content as Pane).children.add(line)
 		draggingLine = line
 	}
 
 	fun continueConnectionDrag(event: MouseEvent) {
-		draggingLine?.let { line ->
+		draggingLine?.let { poly ->
 			val paneCoords = (scrollPane.content as Pane).sceneToLocal(event.sceneX, event.sceneY)
-			line.endX = paneCoords.x
-			line.endY = paneCoords.y
+			if (poly.points.size >= 4) {
+				poly.points[2] = paneCoords.x
+				poly.points[3] = paneCoords.y
+			}
 		}
 	}
 
@@ -644,8 +704,10 @@ class LayoutEditor : Application() {
 		}
 
 		Platform.runLater {
-			scrollPane.hvalue = hValue
-			scrollPane.vvalue = vValue
+			val vp = scrollPane.viewportBounds
+			gridCanvas.width = maxOf(vp.width, contentPane.minWidth)
+			gridCanvas.height = maxOf(vp.height, contentPane.minHeight)
+			drawGrid(gridCanvas)
 		}
 	}
 
@@ -715,9 +777,10 @@ class LayoutEditor : Application() {
 					selectBlock(block)
 					contentPane.requestFocus()
 					val (startX, startY) = block.outputPoint(outputIdx)
-					val line = Line(startX, startY, startX, startY).apply {
-						stroke = Color.BLUE
-						strokeWidth = 2.0
+					val line = Polyline().apply {
+						stroke = Color.GRAY
+						strokeWidth = 4.0
+						points.addAll(startX, startY, startX, startY)
 					}
 					contentPane.children?.add(line)
 					draggingLine = line
@@ -730,66 +793,79 @@ class LayoutEditor : Application() {
 				if (event.button == MouseButton.PRIMARY && draggingLine != null) {
 					val paneCoords = contentPane.sceneToLocal(event.sceneX, event.sceneY)
 					if (paneCoords != null) {
-						draggingLine!!.endX = paneCoords.x
-						draggingLine!!.endY = paneCoords.y
+						val pts = draggingLine!!.points
+						pts[pts.size - 2] = paneCoords.x
+						pts[pts.size - 1] = paneCoords.y
 					}
 					event.consume()
 				}
 			}
 			outCircle.onMouseReleased = EventHandler { event ->
-				if (event.button == MouseButton.PRIMARY && draggingLine != null) {
-					val paneCoords = contentPane.sceneToLocal(event.sceneX, event.sceneY)
-					// Найти input-кружок под курсором
-					val toBlockPair = blocks.asSequence().flatMap { other ->
-						other.inputCircles.mapIndexed { inputIdx, inputCircle -> Triple(other, inputCircle, inputIdx) }
-					}.find { (other, inputCircle, _) ->
-						if (other == draggingFromBlock) return@find false
-						val p = inputCircle.localToScene(inputCircle.centerX, inputCircle.centerY)
-						val panePoint = contentPane.sceneToLocal(p.x, p.y)
-						if (panePoint == null || paneCoords == null) {
-							return@find false
-						}
-						val dx = panePoint.x - paneCoords.x
-						val dy = panePoint.y - paneCoords.y
-						Math.hypot(dx, dy) <= inputCircle.radius + 4
-					}
-					// успешное попадание в input-кружок
-					if (toBlockPair != null && paneCoords != null) {
-						val (toBlock, _, inputIdx) = toBlockPair
-						contentPane.children.remove(draggingLine)
-						val conn = OrthogonalConnection(
-							draggingFromBlock!!,        // исходный блок
-							toBlock,                    // целевой блок
-							contentPane,                // <-- правильный host-Pane
-							draggingFromOutputIndex!!,  // номер выходного порта
-							inputIdx                    // номер входного порта
-						)
-						connections.add(conn)
-						draggingFromBlock!!.connectedLines.add(conn)
-						toBlock.connectedLines.add(conn)
-						conn.setOnMouseClicked { e ->
-							if (e.button == MouseButton.PRIMARY) {
-								selectConnection(conn)
-								contentPane.requestFocus()
-								e.consume()
-							}
-						}
-						draggingLine = null
-						draggingFromOutputIndex = null
-					} else {
-						contentPane.children.remove(draggingLine)
-						draggingLine = null
-						draggingFromOutputIndex = null
-					}
-
-					event.consume()
-				}
+				completeLine(event)
 			}
 		}
 	}
 
 
-	private fun ensureBlockVisible(block: BlockNode, margin: Double = 80.0, extendStep: Double = 200.0) {
+	private fun completeLine(event: MouseEvent) {
+		if (event.button == MouseButton.PRIMARY && draggingLine != null) {
+			val paneCoords = contentPane.sceneToLocal(event.sceneX, event.sceneY)
+			// Найти input-кружок под курсором
+			val toBlockPair = blocks.asSequence().flatMap { other ->
+				other.inputCircles.mapIndexed { inputIdx, inputCircle -> Triple(other, inputCircle, inputIdx) }
+			}.find { (other, inputCircle, _) ->
+				if (other == draggingFromBlock) return@find false
+				val p = inputCircle.localToScene(inputCircle.centerX, inputCircle.centerY)
+				val panePoint = contentPane.sceneToLocal(p.x, p.y)
+				if (panePoint == null || paneCoords == null) {
+					return@find false
+				}
+				val dx = panePoint.x - paneCoords.x
+				val dy = panePoint.y - paneCoords.y
+				Math.hypot(dx, dy) <= inputCircle.radius + 4
+			}
+			if (toBlockPair != null && paneCoords != null) {
+				val (toBlock, _, inputIdx) = toBlockPair
+				val (startX, startY) = draggingFromBlock!!.outputPoint(draggingFromOutputIndex!!)
+				val (endX, endY) = toBlock.inputPoint(inputIdx)
+				draggingLine!!.points.apply {
+					clear()
+					addAll(startX, startY, endX, endY)
+				}
+				val conn = Connection(
+					from = draggingFromBlock!!,
+					to = toBlock,
+					line = draggingLine!!,
+					fromPort = draggingFromOutputIndex!!,
+					toPort = inputIdx
+				)
+				connections.add(conn)
+				draggingFromBlock!!.connectedLines.add(conn)
+				toBlock.connectedLines.add(conn)
+
+				// 6) по клику на линию — выделять её
+				conn.line.setOnMouseClicked { me ->
+					if (me.button == MouseButton.PRIMARY) {
+						selectConnection(conn)
+						(conn.line.parent as? Pane)?.requestFocus()
+						me.consume()
+					}
+				}
+			} else {
+				contentPane.children?.remove(draggingLine)
+				draggingLine = null
+				draggingFromOutputIndex = null
+			}
+			event.consume()
+		}
+	}
+
+
+	private fun ensureBlockVisible(
+		block: BlockNode,
+		margin: Double = 80.0,
+		extendStep: Double = 200.0
+	) {
 		val now = System.currentTimeMillis()
 		if (now - lastEnsureVisible < 180) return
 		lastEnsureVisible = now
@@ -810,8 +886,10 @@ class LayoutEditor : Application() {
 			val shift = extendStep
 			blocks.forEach { it.layoutX += shift }
 			connections.forEach { conn ->
-				conn.line.startX += shift
-				conn.line.endX += shift
+				val pts = conn.line.points
+				for (i in pts.indices step 2) {
+					pts[i] = pts[i] + shift
+				}
 			}
 			contentPane.prefWidth = contentPane.width + shift
 			changed = true
@@ -820,8 +898,10 @@ class LayoutEditor : Application() {
 			val shift = extendStep
 			blocks.forEach { it.layoutY += shift }
 			connections.forEach { conn ->
-				conn.line.startY += shift
-				conn.line.endY += shift
+				val pts = conn.line.points
+				for (i in 1 until pts.size step 2) {
+					pts[i] = pts[i] + shift
+				}
 			}
 			contentPane.prefHeight = contentPane.height + shift
 			changed = true
@@ -831,14 +911,27 @@ class LayoutEditor : Application() {
 			gridCanvas.heightProperty().unbind()
 			gridCanvas.width = contentPane.prefWidth
 			gridCanvas.height = contentPane.prefHeight
-			gridCanvas.widthProperty().bind(contentPane.widthProperty())
-			gridCanvas.heightProperty().bind(contentPane.heightProperty())
+			scrollPane.viewportBoundsProperty().addListener { _, _, vp ->
+				gridCanvas.width = vp.width
+				gridCanvas.height = vp.height
+				drawGrid(gridCanvas)
+			}
 			drawGrid(gridCanvas)
 		}
 	}
 
 
+	private fun updateContentSize() {
+		val bounds = workspaceGroup.layoutBounds
+		contentPane.prefWidth = bounds.maxX
+		contentPane.prefHeight = bounds.maxY
+	}
+
+
 	companion object {
+		private const val DEFAULT_BLOCK_H = 100.0
+		private const val DEFAULT_BLOCK_W = 100.0
+
 		@JvmStatic
 		fun main(args: Array<String>) {
 			launch(LayoutEditor::class.java)
