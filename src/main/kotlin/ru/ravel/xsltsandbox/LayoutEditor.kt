@@ -17,7 +17,6 @@ import javafx.scene.layout.Priority
 import javafx.scene.layout.VBox
 import javafx.scene.paint.Color
 import javafx.scene.shape.Circle
-import javafx.scene.shape.Line
 import javafx.scene.shape.Polyline
 import javafx.stage.DirectoryChooser
 import javafx.stage.FileChooser
@@ -26,9 +25,7 @@ import javafx.util.Callback
 import org.w3c.dom.Element
 import ru.ravel.xsltsandbox.model.BlockType
 import ru.ravel.xsltsandbox.model.BlocksData
-import ru.ravel.xsltsandbox.model.InputFormatType
 import java.io.File
-import java.util.*
 import javax.xml.parsers.DocumentBuilderFactory
 
 
@@ -57,8 +54,9 @@ class LayoutEditor : Application() {
 		vbarPolicy = ScrollPane.ScrollBarPolicy.ALWAYS
 	}
 	private var lastEnsureVisible = 0L
+
 	private val fileTreeView: TreeView<File> = TreeView<File>().apply {
-		prefWidth = 150.0
+		prefWidth = DEFAULT_FILE_TREE_WIDTH
 		isShowRoot = false
 		cellFactory = Callback { _: TreeView<File> ->
 			object : TreeCell<File>() {
@@ -73,18 +71,15 @@ class LayoutEditor : Application() {
 			if (folder != null && folder.isDirectory) {
 				folder.listFiles { f -> f.isFile && f.name == "Layout.xml" }
 					?.firstOrNull()
-					?.let { xmlFile ->
-						importLayoutFromXml(xmlFile)
-					}
+					?.let { xmlFile -> importLayoutFromXml(xmlFile) }
 			}
 		}
 	}
 	private val treeScroll: ScrollPane = ScrollPane(fileTreeView).apply {
 		isFitToHeight = true
 		isFitToWidth = true
-		prefWidth = 150.0
+		prefWidth = DEFAULT_FILE_TREE_WIDTH
 	}
-	private val workspaceScroll = ScrollPane(workspaceGroup).apply {}
 
 
 	override fun start(primaryStage: Stage) {
@@ -202,27 +197,11 @@ class LayoutEditor : Application() {
 			activeContextMenu = menu
 			e.consume()
 		}
-
-		val openProjectButton = Button("Открыть проект").apply {
-			setOnAction {
-				val fileChooser = FileChooser()
-				fileChooser.title = "Открыть проект"
-				fileChooser.extensionFilters.addAll(
-					FileChooser.ExtensionFilter("JSON", "*.json"),
-				)
-				val file = fileChooser.showOpenDialog(primaryStage)
-				if (file != null) {
-					importBlocksFromFile(file)
-					currentProjectFile = file
-					primaryStage.title = currentProjectFile?.name ?: "Low code processes executor"
-				}
-			}
-		}
 		val splitPane: SplitPane = SplitPane(treeScroll, scrollPane).apply {
 			SplitPane.setResizableWithParent(treeScroll, false)
 			Platform.runLater {
 				val total = width.takeIf { it > 0 } ?: this.scene.width
-				setDividerPositions(150.0 / total)
+				setDividerPositions(DEFAULT_FILE_TREE_WIDTH / total)
 			}
 		}
 		VBox.setVgrow(splitPane, Priority.ALWAYS)
@@ -386,11 +365,18 @@ class LayoutEditor : Application() {
 			val topLeftY = xmlY - h / 2
 
 			// 3.4 создаём и настраиваем блок
+			val xsltPath = file.parentFile
+				?.listFiles()
+				?.firstOrNull { it.name == ref }
+				?.listFiles { f -> f.isFile && f.name == "Mapping.xslt" }
+				?.firstOrNull()
+				?.toPath()
 			val block = BlockNode(
 				x = topLeftX,
 				y = topLeftY,
 				name = ref,
-				blockType = type
+				blockType = type,
+				xsltPath = xsltPath,
 			).apply {
 				onMove = this@LayoutEditor::updateContentSize
 				prefWidth = w
@@ -531,11 +517,11 @@ class LayoutEditor : Application() {
 	}
 
 	private fun addBlock(x: Double, y: Double, name: String, blockType: BlockType) {
-		val block = BlockNode(x, y, name, blockType).apply {
+		val block = BlockNode(x, y, name, blockType, xsltPath = null).apply {
 			layoutX = x
 			layoutY = y
-			prefWidth = DEFAULT_BLOCK_W
-			prefHeight = DEFAULT_BLOCK_H
+			prefWidth = BlockNode.BLOCK_H
+			prefHeight = BlockNode.BLOCK_W
 			onMove = this@LayoutEditor::updateContentSize
 		}
 		blocks += block
@@ -550,121 +536,6 @@ class LayoutEditor : Application() {
 		currentProjectFile = file
 		val blocksData = BlocksData(blocks.map { it.toSerialized() }, connections.map { it.toSerialized() })
 		file.writeText(ObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(blocksData))
-	}
-
-
-	private fun importBlocksFromFile(file: File) {
-		currentProjectFile = file
-		updateBlocks()
-		val data: BlocksData = ObjectMapper().readValue(file, BlocksData::class.java)
-
-		// Очистка
-		blocks.clear()
-		connections.clear()
-		(scrollPane.content as? Pane)?.children?.removeIf { it is BlockNode || it is Line }
-
-		val idToBlock = mutableMapOf<UUID, BlockNode>()
-		data.blocks.forEach { b ->
-			val blockType = try {
-				BlockType.valueOf(b.blockType)
-			} catch (_: Exception) {
-				BlockType.MAPPING
-			}
-			val defaultInputCount = if (blockType in arrayOf(BlockType.START, BlockType.INPUT_DATA)) {
-				0
-			} else {
-				b.inputCount.coerceAtLeast(1)
-			}
-			val defaultOutputCount = if (blockType == BlockType.EXIT) {
-				0
-			} else {
-				b.outputCount.coerceAtLeast(1)
-			}
-			val block = BlockNode(
-				x = b.x,
-				y = b.y,
-				name = b.name,
-				blockType = blockType,
-				inputCount = defaultInputCount,
-				outputCount = defaultOutputCount,
-				serializedId = b.id,
-				inputFormat = b.inputFormat ?: InputFormatType.XML,
-				code = b.code ?: "",
-				dataDocs = b.dataDocs ?: "",
-				otherInfo = b.otherInfo ?: "",
-				inputNames = b.inputNames?.toMutableList() ?: mutableListOf(),
-				outputNames = b.outputNames?.toMutableList() ?: mutableListOf(),
-				outputsData = b.outputsData ?: mutableListOf(),
-				packagesNames = b.packagesNames ?: mutableListOf(),
-			).apply {
-				onMove = this@LayoutEditor::updateContentSize
-			}
-			block.onMove = { ensureBlockVisible(block) }
-			blocks.add(block)
-			idToBlock[b.id] = block
-			(scrollPane.content as? Pane)?.children?.add(block)
-			block.rebuildCirclesHandlers { outIndex, outCircle ->
-				outCircle.onMousePressed = EventHandler { event ->
-					if (event.button == MouseButton.PRIMARY) {
-						selectBlock(block)
-						(scrollPane.content as? Pane)?.requestFocus()
-						val (startX, startY) = block.outputPoint(outIndex)
-						val line = Polyline().apply {
-							stroke = Color.GRAY
-							strokeWidth = 4.0
-							points.addAll(startX, startY, startX, startY)
-						}
-						(scrollPane.content as? Pane)?.children?.add(line)
-						draggingLine = line
-						draggingFromBlock = block
-						draggingFromOutputIndex = outIndex
-						event.consume()
-					}
-				}
-				outCircle.onMouseDragged = EventHandler { event ->
-					if (event.button == MouseButton.PRIMARY && draggingLine != null) {
-						val paneCoords = contentPane.sceneToLocal(event.sceneX, event.sceneY)
-						if (paneCoords != null) {
-							val pts = draggingLine!!.points
-							pts[pts.size - 2] = paneCoords.x
-							pts[pts.size - 1] = paneCoords.y
-						}
-						event.consume()
-					}
-				}
-				outCircle.onMouseReleased = EventHandler { event ->
-					completeLine(event)
-				}
-			}
-		}
-
-		// Восстановление соединений
-		data.connections.forEach { c ->
-			val fromBlock = idToBlock[c.fromId] ?: return@forEach
-			val toBlock = idToBlock[c.toId] ?: return@forEach
-			val outIdx = c.fromOutputIndex
-			val inIdx = c.toInputIndex
-			val (startX, startY) = fromBlock.outputPoint(outIdx)
-			val (endX, endY) = toBlock.inputPoint(inIdx)
-			// при загрузке из JSON тоже создаём Polyline
-			val polyline = Polyline().apply {
-				stroke = Color.GRAY
-				strokeWidth = 4.0
-				points.addAll(startX, startY, endX, endY)
-			}
-			val conn = Connection(fromBlock, toBlock, polyline, outIdx, inIdx)
-			connections.add(conn)
-			fromBlock.connectedLines.add(conn)
-			toBlock.connectedLines.add(conn)
-			polyline.onMouseClicked = EventHandler { event ->
-				if (event.button == MouseButton.PRIMARY) {
-					selectConnection(conn)
-					(polyline.parent as? Pane)?.requestFocus()
-					event.consume()
-				}
-			}
-			(scrollPane.content as? Pane)?.children?.add(polyline)
-		}
 	}
 
 
@@ -929,8 +800,7 @@ class LayoutEditor : Application() {
 
 
 	companion object {
-		private const val DEFAULT_BLOCK_H = 100.0
-		private const val DEFAULT_BLOCK_W = 100.0
+		private const val DEFAULT_FILE_TREE_WIDTH = 150.0
 
 		@JvmStatic
 		fun main(args: Array<String>) {

@@ -3,7 +3,6 @@ package ru.ravel.xsltsandbox
 import javafx.beans.binding.Bindings
 import javafx.event.EventHandler
 import javafx.geometry.Insets
-import javafx.geometry.Point2D
 import javafx.geometry.Pos
 import javafx.scene.Node
 import javafx.scene.Scene
@@ -23,6 +22,7 @@ import javafx.stage.Stage
 import ru.ravel.xsltsandbox.model.BlockSerialized
 import ru.ravel.xsltsandbox.model.BlockType
 import ru.ravel.xsltsandbox.model.InputFormatType
+import java.nio.file.Path
 import java.util.*
 import kotlin.math.roundToInt
 
@@ -43,14 +43,15 @@ class BlockNode(
 	var outputNames: MutableList<String> = MutableList(outputCount) { "out${it}" },
 	var outputsData: MutableList<MutableMap<String, Any>> = mutableListOf(),
 	var packagesNames: MutableList<String> = mutableListOf(),
+	private val xsltPath: Path?,
 ) : Pane() {
 
 
 	companion object {
-		private const val BLOCK_W = 100.0
-		private const val BLOCK_H = 100.0
-		private const val CIRCLE_R = 9.0
-		private const val LABEL_MARGIN = 4.0
+		const val BLOCK_W = 100.0
+		const val BLOCK_H = 100.0
+		const val CIRCLE_R = 9.0
+		const val LABEL_MARGIN = 4.0
 	}
 
 	private val rect = Rectangle().apply {
@@ -150,10 +151,11 @@ class BlockNode(
 				app?.selectBlock(this)
 				if (event.clickCount == 2) {
 					(scene?.window?.userData as? LayoutEditor)?.selectBlock(this)
-					val validatorStage = Stage().apply {
-						title = "XSLT Validator"
-					}
-					XsltValidatorApp().start(validatorStage)
+					val validatorStage = Stage()
+					XsltValidatorApp(
+						isOpenedInEditorMode = false,
+						xsltPath = xsltPath,
+					).start(validatorStage)
 					event.consume()
 				}
 			}

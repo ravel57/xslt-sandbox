@@ -38,11 +38,14 @@ import javax.xml.transform.TransformerException
 import javax.xml.transform.TransformerFactory
 import javax.xml.transform.stream.StreamResult
 import javax.xml.transform.stream.StreamSource
+import kotlin.io.path.name
 
 
 class XsltValidatorApp(
-	private val isOpenedInEditorMode: Boolean = false,
+	private val isOpenedInEditorMode: Boolean = true,
 	private val configPath: Path = Paths.get(System.getenv("APPDATA"), "xslt-sandbox", "config.json"),
+	private var xsltPath: Path? = null,
+	private var xmlPath: Path? = null,
 ) : Application() {
 
 	private lateinit var currentStage: Stage
@@ -57,9 +60,6 @@ class XsltValidatorApp(
 	private var searchField: TextField? = null
 	private var currentQuery: String = ""
 
-	private var xmlPath: Path? = null
-	private var xsltPath: Path? = null
-
 	private val watchMap = mutableMapOf<WatchKey, Path>()
 	private lateinit var config: AppConfig
 
@@ -72,11 +72,15 @@ class XsltValidatorApp(
 		// Восстанавливаем пути, даже если не читаем файлы сразу
 		config.xml?.let { p ->
 			val path = Paths.get(p)
-			if (Files.exists(path)) xmlPath = path
+			if (Files.exists(path)) {
+				xmlPath = path
+			}
 		}
 		config.xslt?.let { p ->
 			val path = Paths.get(p)
-			if (Files.exists(path)) xsltPath = path
+			if (Files.exists(path)) {
+				xsltPath = path
+			}
 		}
 		config.xml?.let { xmlPath = Paths.get(it) }
 		config.xslt?.let { xsltPath = Paths.get(it) }
@@ -90,8 +94,7 @@ class XsltValidatorApp(
 					key.pollEvents().forEach { ev ->
 						if (ev.kind() == StandardWatchEventKinds.OVERFLOW) return@forEach
 						val changed = (ev.context() as Path)
-						val fullPath = dir.parent.resolve(changed)
-						when (fullPath) {
+						when (val fullPath = dir.parent.resolve(changed)) {
 							xmlPath -> reloadFileIntoArea(fullPath, xmlArea)
 							xsltPath -> reloadFileIntoArea(fullPath, xsltArea)
 						}
@@ -212,7 +215,7 @@ class XsltValidatorApp(
 			}
 		}
 		primaryStage.apply {
-			title = "XSLT Sandbox"
+			title = xsltPath?.parent?.name ?: "XSLT Sandbox"
 			this.scene = scene
 			show()
 		}
@@ -288,7 +291,7 @@ class XsltValidatorApp(
 			setter(path)                 // xmlPath или xsltPath
 			path.registerWatch()         // слежение
 			Platform.runLater {
-				area.replaceText(it)
+				area.replaceText(it.replace("\uFEFF", ""))
 				highlightAllMatches(area, currentQuery, area === resultArea)
 			}
 			saveConfig()                 // обновляем config.json
@@ -309,17 +312,13 @@ class XsltValidatorApp(
 
 
 	private fun saveCurrentXslt() {
-		val path = xsltPath ?: run {
-			val file = createChooser(
-				"Save XSLT…", xsltPath,
-				"XSLT Files (*.xsl, *.xslt)", "*.xsl", "*.xslt"
-			).showSaveDialog(currentStage) ?: return
-			file.toPath()
-		}
+		val path = xsltPath!!
 		Files.createDirectories(path.parent)
 		Files.writeString(
-			path, xsltArea.text,
-			StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING
+			path,
+			xsltArea.text.replace("\uFEFF", ""),
+			StandardOpenOption.CREATE,
+			StandardOpenOption.TRUNCATE_EXISTING
 		)
 		xsltPath = path                    // путь для следующих сеансов
 		path.registerWatch()
