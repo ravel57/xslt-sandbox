@@ -273,8 +273,8 @@ class XmlXsltValidatorApp : Application() {
 
 
 	private fun restorePreviouslyOpenedFiles() {
-		xmlPath ?.takeIf { Files.exists(it) }?.let {
-			loadFileIntoArea(it, xmlArea) { xmlPath  = it }
+		xmlPath?.takeIf { Files.exists(it) }?.let {
+			loadFileIntoArea(it, xmlArea) { xmlPath = it }
 		}
 		xsltPath?.takeIf { Files.exists(it) }?.let {
 			loadFileIntoArea(it, xsltArea) { xsltPath = it }
@@ -665,67 +665,95 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 	/**
-	 *  Строит абсолютный XPath до узла/атрибута под курсором
-	 *  и одновременно возвращает метаданные каждого сегмента
-	 *  (имя, исходный индекс-предикат, все найденные атрибуты).
+	 * Формирует абсолютный XPath до узла (или атрибута) под курсором
+	 * и возвращает метаданные сегментов для GUI-редактора.
+	 *
+	 * @param xml    полное содержимое XML-документа
+	 * @param offset позиция курсора (selection.start) в этом тексте
 	 */
 	private fun buildXPathWithMeta(xml: String, offset: Int): XPathMeta {
 
-		data class Frame(val name: String, var idx: Int, val attrs: Map<String, String>)
+		/* ────────── структуры и regex ────────── */
 
-		val selfRx = Regex("""<([A-Za-z_][\w\-.]*)([^>]*)?/>""")
-		val openRx = Regex("""<([A-Za-z_][\w\-.]*)([^>]*)?>""")
+		data class Node(
+			val name: String,
+			val attrs: Map<String, String>,
+			val children: MutableList<Node> = mutableListOf(),
+			var parent: Node? = null,
+			var start: Int = 0,
+			var end:   Int = 0
+		)
+
+		val openRx  = Regex("""<([A-Za-z_][\w\-.]*)([^>/]*?)>""")
+		val selfRx  = Regex("""<([A-Za-z_][\w\-.]*)([^>]*?)/>""")
 		val closeRx = Regex("""</([A-Za-z_][\w\-.]*)\s*>""")
-		val attrRx = Regex("""([\w:-]+)\s*=\s*(['"])(.*?)\2""")
-
-		val stack = ArrayDeque<Frame>()
-		var i = 0
-		var resultPath: String? = null
+		val attrRx  = Regex("""([\w:-]+)\s*=\s*(['"])(.*?)\2""")
 
 		fun attrsOf(tag: String) =
 			attrRx.findAll(tag).associate { it.groupValues[1] to it.groupValues[3] }
 
-		fun curPath() = stack.joinToString("") { "/${it.name}[${it.idx}]" }
+		/* ────────── строим дерево только до offset ────────── */
+
+		val root = Node("ROOT", emptyMap())
+		var cur  = root                                 // вершина стека
+		var i    = 0
 
 		while (i < xml.length) {
-			val lt = xml.indexOf('<', i); if (lt < 0) break
-			if (offset in i until lt) {
-				i = lt; continue
+			val lt = xml.indexOf('<', i).takeIf { it >= 0 } ?: break
+			if (offset in i until lt) break              // курсор попал в текст
+
+			when {
+				/* <tag .../> */
+				selfRx.matchAt(xml, lt) != null -> {
+					val m   = selfRx.matchAt(xml, lt)!!
+					val nod = Node(m.groupValues[1], attrsOf(m.value),
+						start = m.range.first, end = m.range.last,
+						parent = cur)
+					cur.children += nod
+					i = m.range.last + 1
+				}
+
+				/* <tag ...> */
+				openRx.matchAt(xml, lt) != null -> {
+					val m   = openRx.matchAt(xml, lt)!!
+					val nod = Node(m.groupValues[1], attrsOf(m.value),
+						start = m.range.first, parent = cur)
+					cur.children += nod
+					cur = nod                            // пуш
+					i   = m.range.last + 1
+				}
+
+				/* </tag> */
+				closeRx.matchAt(xml, lt) != null -> {
+					val m = closeRx.matchAt(xml, lt)!!
+					cur.end = m.range.last
+					cur     = cur.parent ?: root        // поп
+					i       = m.range.last + 1
+				}
+
+				else -> i = lt + 1                      // не тег
 			}
-
-			var handled = false
-
-			selfRx.matchAt(xml, lt)?.also { m ->
-				val name = m.groupValues[1]
-				val idx = stack.count { it.name == name } + 1
-				stack.addLast(Frame(name, idx, attrsOf(m.value)))
-				if (offset in lt..m.range.last) resultPath = curPath()
-				stack.removeLast()
-				i = m.range.last + 1; handled = true
-			}
-
-			if (!handled) openRx.matchAt(xml, lt)?.also { m ->
-				val name = m.groupValues[1]
-				val idx = stack.count { it.name == name } + 1
-				stack.addLast(Frame(name, idx, attrsOf(m.value)))
-				if (offset in lt..m.range.last) resultPath = curPath()
-				i = m.range.last + 1; handled = true
-			}
-
-			if (!handled) closeRx.matchAt(xml, lt)?.also {
-				if (stack.isNotEmpty()) stack.removeLast()
-				i = it.range.last + 1; handled = true
-			}
-
-			if (!handled) i = lt + 1
-			if (resultPath != null) break
 		}
 
-		/*  атрибут под курсором  */
+		/* ────────── ищем путь до узла под offset ────────── */
+
+		fun findPath(n: Node, path: MutableList<Node>): Boolean {
+			if (offset !in n.start..(n.end.takeIf { it > 0 } ?: Int.MAX_VALUE)) return false
+			path += n
+			for (c in n.children) if (findPath(c, path)) return true
+			return true
+		}
+
+		val chain = mutableListOf<Node>()
+		findPath(root, chain)
+		if (chain.size <= 1) return XPathMeta("/", emptyList())  // курсор вне тегов
+
+		/* ────────── атрибут под курсором? ────────── */
+
 		var attrPred = ""
-		if (stack.isNotEmpty()) {
+		run {
 			val tagStart = xml.lastIndexOf('<', offset).coerceAtLeast(0)
-			val tagEnd = xml.indexOf('>', tagStart).coerceAtLeast(tagStart)
+			val tagEnd   = xml.indexOf('>', tagStart).coerceAtLeast(tagStart)
 			if (offset in tagStart..tagEnd) {
 				attrRx.findAll(xml.substring(tagStart, tagEnd + 1)).forEach { a ->
 					val s = tagStart + a.range.first
@@ -735,10 +763,22 @@ class XmlXsltValidatorApp : Application() {
 			}
 		}
 
-		/*  ── СЕГМЕНТЫ ТОЛЬКО ИЗ СТЕКА ──  */
-		val segs = stack.map { SegMeta(it.name, "[${it.idx}]", it.attrs) }
-		return XPathMeta((resultPath ?: curPath()) + attrPred, segs)
+		/* ────────── формируем сегменты и XPath ────────── */
+
+		val segs = chain.drop(1).map { n ->
+			val sameName = n.parent!!.children.filter { it.name == n.name }
+			val idx      = sameName.indexOf(n) + 1
+			SegMeta(n.name, "[$idx]", n.attrs)
+		}
+
+		val xpath = buildString {
+			segs.forEach { append('/').append(it.name).append(it.predicate) }
+			append(attrPred)
+		}
+
+		return XPathMeta(xpath, segs)
 	}
+
 
 
 	private fun Path.registerWatch() {
