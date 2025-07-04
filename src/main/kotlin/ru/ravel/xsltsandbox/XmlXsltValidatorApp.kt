@@ -788,17 +788,12 @@ class XmlXsltValidatorApp : Application() {
 
 	companion object {
 		private val XML_PATTERN: Pattern = Pattern.compile(
-
 			"(?<COMMENT><!--[\\s\\S]*?-->)" +
 					"|(?<CDATA><!\\[CDATA\\[[\\s\\S]*?]]>)" +
-
 					"|(?<TAG></?\\w+)" +
-
 					"|(?<LOCAL>:[\\w-]+)" +
-
 					"|(?<ATTR>\\b\\w+(?==))" +
 					"|(?<VALUE>\"[^\"]*\")" +
-
 					"|(?<BRACKET>/?>)"
 		)
 	}
