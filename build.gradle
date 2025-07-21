@@ -5,7 +5,7 @@ import org.gradle.jvm.toolchain.JavaLanguageVersion
 plugins {
 	id 'java'
 	id 'application'
-	id 'org.jetbrains.kotlin.jvm' version '1.8.22'
+	id 'org.jetbrains.kotlin.jvm' version '1.9.23'
 	id 'org.javamodularity.moduleplugin' version '1.8.12'
 	id 'org.openjfx.javafxplugin' version '0.0.13'
 	id 'org.beryx.jlink' version '2.25.0'
@@ -14,17 +14,19 @@ plugins {
 }
 
 group = 'ru.ravel'
-version = '0.1'
+version = '0.1.6'
 
 repositories {
 	mavenCentral()
 }
 
 dependencies {
-	implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk8"
+	implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.23'
 	implementation "org.fxmisc.richtext:richtextfx:0.10.9"
 	implementation "net.sf.saxon:Saxon-HE:12.3"
 	implementation "org.openjfx:javafx-controls:17"
+
+	implementation "com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.17"
 	implementation "com.fasterxml.jackson.module:jackson-module-kotlin:2.17.0"
 
 	testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
@@ -140,5 +142,11 @@ gluonfx {
 afterEvaluate {
 	tasks.named('mergeClasses') {
 		mustRunAfter tasks.named('compileTestKotlin')
+	}
+}
+
+compileKotlin {
+	kotlinOptions {
+		languageVersion = "1.9"
 	}
 }

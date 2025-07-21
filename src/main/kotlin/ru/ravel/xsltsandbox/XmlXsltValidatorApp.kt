@@ -5,6 +5,7 @@ import javafx.application.Application
 import javafx.application.Platform
 import javafx.geometry.Insets
 import javafx.geometry.Orientation
+import javafx.geometry.Pos
 import javafx.scene.Scene
 import javafx.scene.control.*
 import javafx.scene.input.KeyCode
@@ -16,6 +17,7 @@ import javafx.scene.layout.VBox
 import javafx.stage.FileChooser
 import javafx.stage.Modality
 import javafx.stage.Stage
+import net.sf.saxon.s9api.Processor
 import org.fxmisc.flowless.VirtualizedScrollPane
 import org.fxmisc.richtext.CodeArea
 import org.fxmisc.richtext.LineNumberFactory
@@ -26,6 +28,8 @@ import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
 import java.io.StringReader
 import java.io.StringWriter
+import java.nio.charset.Charset
+import java.nio.charset.StandardCharsets
 import java.nio.file.*
 import java.util.regex.Pattern
 import javax.xml.parsers.SAXParserFactory
@@ -52,7 +56,8 @@ class XmlXsltValidatorApp : Application() {
 	private lateinit var currentStage: Stage
 	private val configPath: Path = Paths.get(System.getenv("APPDATA"), "xslt-sandbox", "config.json")
 	private lateinit var config: AppConfig
-
+	private var disableSyntaxHighlighting = false
+	private lateinit var nanCountLabel: Label
 
 	override fun init() {
 		config = runCatching {
@@ -116,7 +121,19 @@ class XmlXsltValidatorApp : Application() {
 
 		val xsltBox = vBoxWithLabel("XSLT", xsltArea)
 		val xmlBox = vBoxWithLabel("XML", xmlArea)
-		val resultBox = vBoxWithLabel("Result", resultArea)
+		nanCountLabel = Label().apply {
+			isVisible = false
+			padding = Insets(0.0, 0.0, 0.0, 8.0)
+		}
+		val resultLabel = Label("Result")
+		val resultHeader = HBox(4.0, resultLabel, nanCountLabel).apply {
+			alignment = Pos.CENTER_LEFT
+		}
+		val resultScroll = VirtualizedScrollPane(resultArea)
+		VBox.setVgrow(resultScroll, Priority.ALWAYS)
+		val resultBox = VBox(4.0, resultHeader, resultScroll).apply {
+			padding = Insets(8.0)
+		}
 
 		val topSplit = SplitPane(xsltBox, xmlBox).apply {
 			orientation = Orientation.HORIZONTAL
@@ -136,12 +153,13 @@ class XmlXsltValidatorApp : Application() {
 		val xpathBtn = Button("XPath…").apply {
 			setOnAction { openXPathEditor(primaryStage) }
 		}
+		val executeXpathBtn = Button("Execute XPath…").apply {
+			setOnAction { executeXpath(primaryStage) }
+		}
 		val openXmlBtn = Button("Open XML…").apply {
 			setOnAction {
-				val file = createChooser(
-					"Open XML…", xmlPath, "XML Files (*.xml)", "*.xml"
-				).showOpenDialog(currentStage) ?: return@setOnAction
-
+				val file = createChooser("Open XML…", xmlPath, "XML Files (*.xml)", "*.xml")
+					.showOpenDialog(currentStage) ?: return@setOnAction
 				loadFileIntoArea(file.toPath(), xmlArea) { xmlPath = it }
 			}
 		}
@@ -158,16 +176,26 @@ class XmlXsltValidatorApp : Application() {
 		val saveXsltBtn = Button("Save XSLT…").apply {
 			setOnAction { saveCurrentXslt() }
 		}
-		val toolBar = HBox(5.0, validateBtn, searchBtn, xpathBtn).apply {
+
+		val disableHighlightCheck = CheckBox("Disable syntactic highlights").apply {
+			setOnAction {
+				disableSyntaxHighlighting = isSelected
+				listOf(xsltArea, xmlArea, resultArea).forEach {
+					highlightAllMatches(it, currentQuery, it === resultArea)
+				}
+			}
+		}
+
+		val toolBar = HBox(5.0, validateBtn, searchBtn, xpathBtn, executeXpathBtn).apply { padding = Insets(10.0) }
+		val filesBar = HBox(5.0, openXsltBtn, saveXsltBtn, openXmlBtn).apply { padding = Insets(10.0) }
+		val topBar = HBox(10.0, toolBar, filesBar, disableHighlightCheck).apply {
+			prefWidthProperty().bind(primaryStage.widthProperty())
+			alignment = Pos.CENTER_LEFT
 			padding = Insets(10.0)
 		}
-		val filesBar = HBox(5.0, openXsltBtn, saveXsltBtn, openXmlBtn).apply {
-			padding = Insets(10.0)
-		}
-		val hBox = HBox(5.0, toolBar, filesBar)
 
 		val root = BorderPane().apply {
-			top = hBox
+			top = topBar
 			center = mainSplit
 		}
 
@@ -235,7 +263,7 @@ class XmlXsltValidatorApp : Application() {
 		extensionFilters += FileChooser.ExtensionFilter(description, *masks)
 		lastPath?.parent
 			?.takeIf { Files.isDirectory(it) }
-			?.let { initialDirectory = it.toFile() } // ❷ папка из конфига
+			?.let { initialDirectory = it.toFile() }
 	}
 
 
@@ -258,7 +286,7 @@ class XmlXsltValidatorApp : Application() {
 
 
 	private fun loadFileIntoArea(path: Path, area: CodeArea, setter: (Path) -> Unit) {
-		runCatching { Files.readString(path) }.onSuccess {
+		runCatching { readTextRespectingXmlDecl(path) }.onSuccess {
 			setter(path)                 // xmlPath или xsltPath
 			path.registerWatch()         // слежение
 			Platform.runLater {
@@ -374,10 +402,39 @@ class XmlXsltValidatorApp : Application() {
 		}
 
 		Platform.runLater {
-			resultArea.replaceText(writer.toString())
+			val resultText = writer.toString()
+			resultArea.replaceText(resultText)
 			highlightAllMatches(resultArea, currentQuery, true)
+			val nanCount = Regex("\\bNaN\\b").findAll(resultText).count()
+			nanCountLabel.text = "NaNs: $nanCount"
+			nanCountLabel.isVisible = nanCount > 0
 			showStatus(owner, status.toString())
 		}
+	}
+
+
+	private fun readTextRespectingXmlDecl(path: Path): String {
+		val bytes = Files.readAllBytes(path)
+		fun bomCharset(): Pair<Int, Charset>? = when {
+			bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()
+			-> 3 to StandardCharsets.UTF_8
+
+			bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte()
+			-> 2 to StandardCharsets.UTF_16BE
+
+			bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()
+			-> 2 to StandardCharsets.UTF_16LE
+
+			else -> null
+		}
+		bomCharset()?.let { (skip, cs) -> return String(bytes, skip, bytes.size - skip, cs) }
+		val probe = String(bytes, 0, minOf(bytes.size, 256), Charsets.ISO_8859_1)
+		val enc = Regex("""encoding\s*=\s*['"]([\w\-\d]+)['"]""", RegexOption.IGNORE_CASE)
+			.find(probe)
+			?.groupValues
+			?.get(1)
+			?.let { runCatching { Charset.forName(it) }.getOrNull() }
+		return String(bytes, enc ?: StandardCharsets.UTF_8)
 	}
 
 
@@ -511,8 +568,11 @@ class XmlXsltValidatorApp : Application() {
 			area.setStyleSpans(0, spans.create())
 			return
 		}
-		val styles = computeSyntaxHighlightingChars(text)
-		// Подсветка NaN всегда (НЕ только при поиске)
+		val styles = if (disableSyntaxHighlighting) {
+			MutableList(text.length) { mutableListOf() }
+		} else {
+			computeSyntaxHighlightingChars(text)
+		}
 		if (highlightNaN) {
 			Regex("\\bNaN\\b").findAll(text).forEach { m ->
 				for (i in m.range) {
@@ -575,19 +635,18 @@ class XmlXsltValidatorApp : Application() {
 
 
 	private fun openXPathEditor(owner: Stage) {
-		if (currentArea !== xmlArea) return
-
-		val meta = buildXPathWithMeta(xmlArea.text, xmlArea.selection.start)
+		val area = currentArea ?: return
+		if (area !== xmlArea && area !== resultArea) {
+			return
+		}
+		val meta = buildXPathWithMeta(area.text, area.selection.start)
 		if (meta.xpath.isBlank()) {
 			showStatus(owner, "Не удалось построить XPath"); return
 		}
-
-		/* если окно уже есть – обновляем строку и выводим на-передний-план */
 		searchDialog?.let { dlg ->
 			(dlg.scene.lookup("#xpathField") as TextField).text = meta.xpath
 			dlg.toFront(); dlg.requestFocus(); return
 		}
-
 		/* ─────────────── GUI ─────────────── */
 		/** одна строка «имя + ChoiceBox» */
 		fun segRow(seg: SegMeta): HBox {
@@ -612,8 +671,6 @@ class XmlXsltValidatorApp : Application() {
 		val resultField = TextField(meta.xpath).apply {
 			id = "xpathField"; isEditable = false
 		}
-
-		/* перестраиваем путь при изменении выбора */
 		fun rebuild() {
 			val sb = StringBuilder()
 			rows.forEachIndexed { i, row ->
@@ -633,9 +690,7 @@ class XmlXsltValidatorApp : Application() {
 			(r.children[1] as ChoiceBox<*>).valueProperty()
 				.addListener { _, _, _ -> rebuild() }
 		}
-
 		val okBtn = Button("Copy & Close")
-
 		val dlg = Stage()
 		searchDialog = dlg
 		okBtn.setOnAction {
@@ -645,7 +700,6 @@ class XmlXsltValidatorApp : Application() {
 			})
 			dlg.close()
 		}
-
 		dlg.apply {
 			initOwner(owner)
 			initModality(Modality.WINDOW_MODAL)
@@ -653,7 +707,6 @@ class XmlXsltValidatorApp : Application() {
 			scene = Scene(VBox(8.0, rowsScroll, resultField, okBtn).apply {
 				padding = Insets(12.0)
 			})
-
 			/* Esc — закрыть */
 			scene.setOnKeyPressed { ev ->
 				if (ev.code == KeyCode.ESCAPE) close()
@@ -663,6 +716,60 @@ class XmlXsltValidatorApp : Application() {
 			show()
 		}
 	}
+
+
+	private fun executeXpath(primaryStage: Stage) {
+		// ───────── создание диалога ─────────
+		val dlg = Stage().apply {
+			initOwner(primaryStage)
+			initModality(Modality.WINDOW_MODAL)
+			title = "Execute XPath"
+		}
+
+		val xpathField = TextField().apply { promptText = "Input XPath…" }
+
+		val xmlRadio = RadioButton("XML").apply { isSelected = currentArea !== resultArea }
+		val resultRadio = RadioButton("Result").apply { isSelected = !xmlRadio.isSelected }
+		ToggleGroup().also { tg -> tg.toggles.addAll(xmlRadio, resultRadio) }
+		val runBtn = Button("Run")
+		val closeBtn = Button("Close")
+		// ───────── выполнение XPath ─────────
+		runBtn.setOnAction {
+			val xmlText = if (resultRadio.isSelected) resultArea.text else xmlArea.text
+			val expr = xpathField.text.trim()
+			if (expr.isEmpty()) {
+				showStatus(primaryStage, "Empty expression."); return@setOnAction
+			}
+			try {
+				val proc = Processor(false)
+				val builder = proc.newDocumentBuilder()
+				val doc = builder.build(StreamSource(StringReader(xmlText)))
+				val compiler = proc.newXPathCompiler()
+				val value = compiler.evaluate(expr, doc)
+
+				val out = buildString { value.forEach { append(it.stringValue).append('\n') } }
+					.ifBlank { "— no results —" }
+				showStatus(primaryStage, out)
+				dlg.close()
+			} catch (ex: Exception) {
+				showStatus(primaryStage, "Error XPath:\n${ex.message}")
+			}
+		}
+		closeBtn.setOnAction { dlg.close() }
+
+		dlg.scene = Scene(
+			VBox(
+				10.0,
+				xpathField,
+				HBox(10.0, xmlRadio, resultRadio),
+				HBox(10.0, runBtn, closeBtn)
+			).apply { padding = Insets(12.0) }
+		).also { sc ->
+			sc.setOnKeyPressed { if (it.code == KeyCode.ESCAPE) dlg.close() }
+		}
+		dlg.show()
+	}
+
 
 	/**
 	 * Формирует абсолютный XPath до узла (или атрибута) под курсором
@@ -681,13 +788,13 @@ class XmlXsltValidatorApp : Application() {
 			val children: MutableList<Node> = mutableListOf(),
 			var parent: Node? = null,
 			var start: Int = 0,
-			var end:   Int = 0
+			var end: Int = 0
 		)
 
-		val openRx  = Regex("""<([A-Za-z_][\w\-.]*)([^>/]*?)>""")
-		val selfRx  = Regex("""<([A-Za-z_][\w\-.]*)([^>]*?)/>""")
+		val openRx = Regex("""<([A-Za-z_][\w\-.]*)([^>/]*?)>""")
+		val selfRx = Regex("""<([A-Za-z_][\w\-.]*)([^>]*?)/>""")
 		val closeRx = Regex("""</([A-Za-z_][\w\-.]*)\s*>""")
-		val attrRx  = Regex("""([\w:-]+)\s*=\s*(['"])(.*?)\2""")
+		val attrRx = Regex("""([\w:-]+)\s*=\s*(['"])(.*?)\2""")
 
 		fun attrsOf(tag: String) =
 			attrRx.findAll(tag).associate { it.groupValues[1] to it.groupValues[3] }
@@ -695,8 +802,8 @@ class XmlXsltValidatorApp : Application() {
 		/* ────────── строим дерево только до offset ────────── */
 
 		val root = Node("ROOT", emptyMap())
-		var cur  = root                                 // вершина стека
-		var i    = 0
+		var cur = root                                 // вершина стека
+		var i = 0
 
 		while (i < xml.length) {
 			val lt = xml.indexOf('<', i).takeIf { it >= 0 } ?: break
@@ -705,30 +812,34 @@ class XmlXsltValidatorApp : Application() {
 			when {
 				/* <tag .../> */
 				selfRx.matchAt(xml, lt) != null -> {
-					val m   = selfRx.matchAt(xml, lt)!!
-					val nod = Node(m.groupValues[1], attrsOf(m.value),
+					val m = selfRx.matchAt(xml, lt)!!
+					val nod = Node(
+						m.groupValues[1], attrsOf(m.value),
 						start = m.range.first, end = m.range.last,
-						parent = cur)
+						parent = cur
+					)
 					cur.children += nod
 					i = m.range.last + 1
 				}
 
 				/* <tag ...> */
 				openRx.matchAt(xml, lt) != null -> {
-					val m   = openRx.matchAt(xml, lt)!!
-					val nod = Node(m.groupValues[1], attrsOf(m.value),
-						start = m.range.first, parent = cur)
+					val m = openRx.matchAt(xml, lt)!!
+					val nod = Node(
+						m.groupValues[1], attrsOf(m.value),
+						start = m.range.first, parent = cur
+					)
 					cur.children += nod
 					cur = nod                            // пуш
-					i   = m.range.last + 1
+					i = m.range.last + 1
 				}
 
 				/* </tag> */
 				closeRx.matchAt(xml, lt) != null -> {
 					val m = closeRx.matchAt(xml, lt)!!
 					cur.end = m.range.last
-					cur     = cur.parent ?: root        // поп
-					i       = m.range.last + 1
+					cur = cur.parent ?: root        // поп
+					i = m.range.last + 1
 				}
 
 				else -> i = lt + 1                      // не тег
@@ -753,7 +864,7 @@ class XmlXsltValidatorApp : Application() {
 		var attrPred = ""
 		run {
 			val tagStart = xml.lastIndexOf('<', offset).coerceAtLeast(0)
-			val tagEnd   = xml.indexOf('>', tagStart).coerceAtLeast(tagStart)
+			val tagEnd = xml.indexOf('>', tagStart).coerceAtLeast(tagStart)
 			if (offset in tagStart..tagEnd) {
 				attrRx.findAll(xml.substring(tagStart, tagEnd + 1)).forEach { a ->
 					val s = tagStart + a.range.first
@@ -767,7 +878,7 @@ class XmlXsltValidatorApp : Application() {
 
 		val segs = chain.drop(1).map { n ->
 			val sameName = n.parent!!.children.filter { it.name == n.name }
-			val idx      = sameName.indexOf(n) + 1
+			val idx = sameName.indexOf(n) + 1
 			SegMeta(n.name, "[$idx]", n.attrs)
 		}
 
@@ -778,7 +889,6 @@ class XmlXsltValidatorApp : Application() {
 
 		return XPathMeta(xpath, segs)
 	}
-
 
 
 	private fun Path.registerWatch() {
