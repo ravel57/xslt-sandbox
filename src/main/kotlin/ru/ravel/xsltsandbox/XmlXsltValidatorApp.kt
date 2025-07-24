@@ -31,6 +31,7 @@ import java.io.StringWriter
 import java.nio.charset.Charset
 import java.nio.charset.StandardCharsets
 import java.nio.file.*
+import java.util.concurrent.ConcurrentHashMap
 import java.util.regex.Pattern
 import javax.xml.parsers.SAXParserFactory
 import javax.xml.transform.ErrorListener
@@ -42,59 +43,30 @@ import javax.xml.transform.stream.StreamSource
 
 class XmlXsltValidatorApp : Application() {
 
-	private lateinit var xsltArea: CodeArea
-	private lateinit var xmlArea: CodeArea
-	private lateinit var resultArea: CodeArea
+	private lateinit var tabPane: TabPane
+	private val sessions = mutableMapOf<Tab, DocSession>()
+	private val plusTab = Tab("+").apply { isClosable = false }
+	private val currentSession: DocSession
+		get() = sessions[tabPane.selectionModel.selectedItem]!!
 	private var currentArea: CodeArea? = null
+
+	//	private var currentArea: CodeArea? = null
 	private var searchDialog: Stage? = null
 	private var searchField: TextField? = null
 	private var currentQuery: String = ""
-	private var xmlPath: Path? = null
-	private var xsltPath: Path? = null
-	private val watchService: WatchService = FileSystems.getDefault().newWatchService()
-	private val watchMap = mutableMapOf<WatchKey, Path>()
+	private val watchService = FileSystems.getDefault().newWatchService()
+	private val watchMap = ConcurrentHashMap<Path, Pair<DocSession, CodeArea>>()
+	private val watchDirs = mutableSetOf<Path>()
 	private lateinit var currentStage: Stage
 	private val configPath: Path = Paths.get(System.getenv("APPDATA"), "xslt-sandbox", "config.json")
 	private lateinit var config: AppConfig
 	private var disableSyntaxHighlighting = false
-	private lateinit var nanCountLabel: Label
+
 
 	override fun init() {
 		config = runCatching {
 			jacksonObjectMapper().readValue(configPath.toFile(), AppConfig::class.java)
 		}.getOrElse { AppConfig() }
-
-		// Восстанавливаем пути, даже если не читаем файлы сразу
-		config.xml?.let { p ->
-			val path = Paths.get(p)
-			if (Files.exists(path)) xmlPath = path
-		}
-		config.xslt?.let { p ->
-			val path = Paths.get(p)
-			if (Files.exists(path)) xsltPath = path
-		}
-		config.xml?.let { xmlPath = Paths.get(it) }
-		config.xslt?.let { xsltPath = Paths.get(it) }
-
-		// запускаем ещё до start()
-		Thread {
-			while (!Thread.currentThread().isInterrupted) {
-				val key = watchService.take()          // блокируется
-				val dir = watchMap[key]               // путь файла, за которым следим
-				if (dir != null) {
-					key.pollEvents().forEach { ev ->
-						if (ev.kind() == StandardWatchEventKinds.OVERFLOW) return@forEach
-						val changed = (ev.context() as Path)
-						val fullPath = dir.parent.resolve(changed)
-						when (fullPath) {
-							xmlPath -> reloadFileIntoArea(fullPath, xmlArea)
-							xsltPath -> reloadFileIntoArea(fullPath, xsltArea)
-						}
-					}
-				}
-				key.reset()
-			}
-		}.apply { isDaemon = true }.start()
 	}
 
 
@@ -102,38 +74,145 @@ class XmlXsltValidatorApp : Application() {
 		try {
 			saveConfig()
 			watchService.close()
-		} catch (_: Exception) {
+		} catch (e: Exception) {
+			System.err.println(e.localizedMessage)
+			System.err.println(e.stackTrace)
 		}
+		super.stop()
 	}
 
 
 	override fun start(primaryStage: Stage) {
 		currentStage = primaryStage
-		xsltArea = createHighlightingCodeArea(false)
-		xmlArea = createHighlightingCodeArea(false)
-		resultArea = createHighlightingCodeArea(true).apply { isEditable = false }
-		restorePreviouslyOpenedFiles()
+
+		tabPane = TabPane().apply {
+			tabClosingPolicy = TabPane.TabClosingPolicy.ALL_TABS
+		}
+		val first = createNewSessionTab("Tab 1")
+		tabPane.tabs += first.tab
+		plusTab.setOnSelectionChanged {
+			if (plusTab.isSelected) {
+				val created = createNewSessionTab("Tab ${sessions.size + 1}")
+				tabPane.tabs.add(tabPane.tabs.size - 1, created.tab)
+				tabPane.selectionModel.select(created.tab)
+			}
+		}
+		tabPane.tabs += plusTab
+
+		val topBar = buildToolBar()
+
+		val root = BorderPane().apply {
+			top = topBar
+			center = tabPane //mainSplit
+		}
+
+		val scene = Scene(root, 1200.0, 800.0).apply {
+			addEventFilter(KeyEvent.KEY_PRESSED) { event ->
+				if (event.code == KeyCode.F && event.isControlDown) {
+					showSearchWindow(primaryStage, currentSession.currentAreaOr(xml = true))
+					event.consume()
+				}
+			}
+			// если подключаете css подсветки
+			javaClass.classLoader.getResource("xml-highlighting.css")?.let {
+				stylesheets += it.toExternalForm()
+			}
+		}
+
+		primaryStage.title = "XSLT Sandbox"
+		primaryStage.scene = scene
+		primaryStage.show()
+
+		// восстановим последнюю сессию из config (если нужно)
+		restorePreviouslyOpenedFiles(first)
+	}
+
+
+	private fun buildToolBar(): HBox {
+		val validateBtn = Button("Validate & Transform").apply {
+			setOnAction { doTransform(currentStage) }
+		}
+		val searchBtn = Button("Search").apply {
+			setOnAction { showSearchWindow(currentStage, currentSession.currentAreaOr(xml = true)) }
+		}
+
+		val xpathBtn = Button("XPath…").apply {
+			setOnAction { openXPathEditor(currentStage) }
+		}
+
+		val executeXpathBtn = Button("Execute XPath…").apply {
+			setOnAction { executeXpath(currentStage) }
+		}
+
+		val openXmlBtn = Button("Open XML…").apply {
+			setOnAction {
+				val file = createChooser(
+					"Open XML…", currentSession.xmlPath,
+					"XML Files (*.xml)", "*.xml"
+				).showOpenDialog(currentStage) ?: return@setOnAction
+				loadFileIntoArea(currentSession, file.toPath(), currentSession.xmlArea) { currentSession.xmlPath = it }
+			}
+		}
+		val openXsltBtn = Button("Open XSLT…").apply {
+			setOnAction {
+				val file = createChooser(
+					"Open XSLT…", currentSession.xsltPath,
+					"XSLT Files (*.xsl, *.xslt)", "*.xsl", "*.xslt"
+				).showOpenDialog(currentStage) ?: return@setOnAction
+				loadFileIntoArea(currentSession, file.toPath(), currentSession.xsltArea) { currentSession.xsltPath = it }
+			}
+		}
+		val saveXsltBtn = Button("Save XSLT…").apply {
+			setOnAction { saveCurrentXslt() }
+		}
+
+		val disableHighlightCheck = CheckBox("Disable syntactic highlights").apply {
+			isSelected = disableSyntaxHighlighting
+			setOnAction {
+				disableSyntaxHighlighting = isSelected
+				sessions.values.forEach { s ->
+					listOf(s.xsltArea, s.xmlArea, s.resultArea).forEach {
+						highlightAllMatches(it, currentQuery, it === s.resultArea)
+					}
+				}
+			}
+		}
+
+		return HBox(
+			8.0,
+			validateBtn, searchBtn, xpathBtn, executeXpathBtn,
+			openXsltBtn, saveXsltBtn, openXmlBtn,
+			disableHighlightCheck
+		).apply {
+			alignment = Pos.CENTER_LEFT
+			padding = Insets(10.0)
+		}
+	}
+
+
+	private fun createNewSessionTab(title: String): DocSession {
+		val xsltArea = createHighlightingCodeArea(false)
+		val xmlArea = createHighlightingCodeArea(false)
+		val resultArea = createHighlightingCodeArea(true).apply { isEditable = false }
+
+		// чтобы Ctrl+F искал по активной области
 		listOf(xsltArea, xmlArea, resultArea).forEach { area ->
 			area.setOnMouseClicked { currentArea = area }
 			area.addEventHandler(KeyEvent.KEY_PRESSED) { currentArea = area }
 		}
-		currentArea = xmlArea
 
 		val xsltBox = vBoxWithLabel("XSLT", xsltArea)
 		val xmlBox = vBoxWithLabel("XML", xmlArea)
-		nanCountLabel = Label().apply {
+
+		val nanCountLabel = Label().apply {
 			isVisible = false
 			padding = Insets(0.0, 0.0, 0.0, 8.0)
 		}
 		val resultLabel = Label("Result")
-		val resultHeader = HBox(4.0, resultLabel, nanCountLabel).apply {
-			alignment = Pos.CENTER_LEFT
-		}
+		val resultHeader = HBox(4.0, resultLabel, nanCountLabel).apply { alignment = Pos.CENTER_LEFT }
 		val resultScroll = VirtualizedScrollPane(resultArea)
 		VBox.setVgrow(resultScroll, Priority.ALWAYS)
-		val resultBox = VBox(4.0, resultHeader, resultScroll).apply {
-			padding = Insets(8.0)
-		}
+		val resultBox = VBox(4.0, resultHeader, resultScroll).apply { padding = Insets(8.0) }
 
 		val topSplit = SplitPane(xsltBox, xmlBox).apply {
 			orientation = Orientation.HORIZONTAL
@@ -144,82 +223,27 @@ class XmlXsltValidatorApp : Application() {
 			setDividerPositions(0.7)
 		}
 
-		val validateBtn = Button("Validate & Transform").apply {
-			setOnAction { doTransform(primaryStage) }
-		}
-		val searchBtn = Button("Search").apply {
-			setOnAction { showSearchWindow(primaryStage, currentArea ?: xmlArea) }
-		}
-		val xpathBtn = Button("XPath…").apply {
-			setOnAction { openXPathEditor(primaryStage) }
-		}
-		val executeXpathBtn = Button("Execute XPath…").apply {
-			setOnAction { executeXpath(primaryStage) }
-		}
-		val openXmlBtn = Button("Open XML…").apply {
-			setOnAction {
-				val file = createChooser("Open XML…", xmlPath, "XML Files (*.xml)", "*.xml")
-					.showOpenDialog(currentStage) ?: return@setOnAction
-				loadFileIntoArea(file.toPath(), xmlArea) { xmlPath = it }
-			}
-		}
-		val openXsltBtn = Button("Open XSLT…").apply {
-			setOnAction {
-				val file = createChooser(
-					"Open XSLT…", xsltPath,
-					"XSLT Files (*.xsl, *.xslt)", "*.xsl", "*.xslt"
-				).showOpenDialog(currentStage) ?: return@setOnAction
-
-				loadFileIntoArea(file.toPath(), xsltArea) { xsltPath = it }
-			}
-		}
-		val saveXsltBtn = Button("Save XSLT…").apply {
-			setOnAction { saveCurrentXslt() }
-		}
-
-		val disableHighlightCheck = CheckBox("Disable syntactic highlights").apply {
-			setOnAction {
-				disableSyntaxHighlighting = isSelected
-				listOf(xsltArea, xmlArea, resultArea).forEach {
-					highlightAllMatches(it, currentQuery, it === resultArea)
+		val tab = Tab(title, mainSplit).apply {
+			isClosable = true
+			setOnClosed {
+				sessions.remove(this)
+				if (tabPane?.tabs?.size == 1) { // остался только '+'
+					val t = createNewSessionTab("Tab 1")
+					tabPane.tabs.add(tabPane.tabs.size - 1, t.tab)
+					tabPane.selectionModel.select(t.tab)
 				}
 			}
 		}
 
-		val toolBar = HBox(5.0, validateBtn, searchBtn, xpathBtn, executeXpathBtn).apply { padding = Insets(10.0) }
-		val filesBar = HBox(5.0, openXsltBtn, saveXsltBtn, openXmlBtn).apply { padding = Insets(10.0) }
-		val topBar = HBox(10.0, toolBar, filesBar, disableHighlightCheck).apply {
-			prefWidthProperty().bind(primaryStage.widthProperty())
-			alignment = Pos.CENTER_LEFT
-			padding = Insets(10.0)
-		}
-
-		val root = BorderPane().apply {
-			top = topBar
-			center = mainSplit
-		}
-
-		val scene = Scene(root, 900.0, 650.0)
-		val cssUrl = javaClass.classLoader.getResource("xml-highlighting.css")
-		if (cssUrl != null) {
-			scene.stylesheets += cssUrl.toExternalForm()
-		} else {
-			System.err.println("⚠️ xml-highlighting.css not found in classpath!")
-		}
-
-		scene.addEventFilter(KeyEvent.KEY_PRESSED) { event ->
-			if (event.code == KeyCode.F && event.isControlDown) {
-				showSearchWindow(primaryStage, currentArea ?: xmlArea)
-				event.consume()
-			}
-		}
-		primaryStage.apply {
-			title = "XSLT Sandbox"
-			this.scene = scene
-			show()
-		}
+		val session = DocSession(tab, xsltArea, xmlArea, resultArea, nanCountLabel)
+		sessions[tab] = session
+		return session
 	}
 
+
+	private fun DocSession.currentAreaOr(xml: Boolean): CodeArea {
+		return currentArea ?: if (xml) this.xmlArea else this.xsltArea
+	}
 
 	/**
 	 *  Creates a CodeArea with line numbers and XML syntax highlighting
@@ -270,14 +294,20 @@ class XmlXsltValidatorApp : Application() {
 	private fun saveConfig() {
 		try {
 			Files.createDirectories(configPath.parent)
+			val workTabs = tabPane.tabs.filter { it != plusTab }
+			val tabStates = workTabs.map { tab ->
+				val s = sessions[tab]!!
+				TabState(
+					xml = s.xmlPath?.toString(),
+					xslt = s.xsltPath?.toString()
+				)
+			}
+			val activeIndex = workTabs.indexOf(tabPane.selectionModel.selectedItem).coerceAtLeast(0)
+			val cfg = AppConfig(tabStates, activeIndex)
 			Files.writeString(
 				configPath,
-				jacksonObjectMapper().writerWithDefaultPrettyPrinter()
-					.writeValueAsString(
-						AppConfig(xmlPath?.toString(), xsltPath?.toString())
-					),
-				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-				StandardOpenOption.WRITE
+				jacksonObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(cfg),
+				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE
 			)
 		} catch (ex: Exception) {
 			println("Не удалось сохранить config.json → ${ex.message}")
@@ -285,48 +315,88 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
-	private fun loadFileIntoArea(path: Path, area: CodeArea, setter: (Path) -> Unit) {
-		runCatching { readTextRespectingXmlDecl(path) }.onSuccess {
-			setter(path)                 // xmlPath или xsltPath
-			path.registerWatch()         // слежение
-			Platform.runLater {
-				area.replaceText(it)
-				highlightAllMatches(area, currentQuery, area === resultArea)
-			}
-			saveConfig()                 // обновляем config.json
-		}.onFailure {
-			showStatus(currentStage, "Не удалось открыть файл:\n${it.message}")
+	private fun loadFileIntoArea(
+		session: DocSession,
+		path: Path,
+		area: CodeArea,
+		setPath: (Path) -> Unit
+	) {
+		area.replaceText(Files.readString(path, Charsets.UTF_8))
+		setPath(path)
+
+		val dir = path.parent
+		watchMap[path] = session to area
+		if (!watchDirs.contains(dir)) {
+			dir.register(watchService, StandardWatchEventKinds.ENTRY_MODIFY)
+			watchDirs.add(dir)
 		}
 	}
 
 
-	private fun restorePreviouslyOpenedFiles() {
-		xmlPath?.takeIf { Files.exists(it) }?.let {
-			loadFileIntoArea(it, xmlArea) { xmlPath = it }
+	private fun restorePreviouslyOpenedFiles(first: DocSession) {
+		val tabs = config.tabs
+		if (tabs.isEmpty()) return
+		loadTabStateIntoSession(first, tabs[0])
+		for (i in 1 until tabs.size) {
+			val s = createNewSessionTab("Tab ${i + 1}")
+			tabPane.tabs.add(tabPane.tabs.size - 1, s.tab) // перед '+'
+			loadTabStateIntoSession(s, tabs[i])
 		}
-		xsltPath?.takeIf { Files.exists(it) }?.let {
-			loadFileIntoArea(it, xsltArea) { xsltPath = it }
+		val workTabs = tabPane.tabs.filter { it != plusTab }
+		val toSelect = config.activeIndex.coerceIn(0, workTabs.lastIndex)
+		tabPane.selectionModel.select(workTabs[toSelect])
+	}
+
+	private fun loadTabStateIntoSession(session: DocSession, state: TabState) {
+		state.xml?.let { p ->
+			val path = Paths.get(p)
+			if (Files.exists(path)) {
+				loadFileIntoArea(session, path, session.xmlArea) { session.xmlPath = it }
+			}
+		}
+		state.xslt?.let { p ->
+			val path = Paths.get(p)
+			if (Files.exists(path)) {
+				loadFileIntoArea(session, path, session.xsltArea) { session.xsltPath = it }
+			}
 		}
 	}
 
 
 	private fun saveCurrentXslt() {
-		val path = xsltPath ?: run {
+		val s = currentSession
+		val path: Path = s.xsltPath ?: run {
 			val file = createChooser(
-				"Save XSLT…", xsltPath,
+				"Save XSLT…",
+				s.xsltPath,
 				"XSLT Files (*.xsl, *.xslt)", "*.xsl", "*.xslt"
 			).showSaveDialog(currentStage) ?: return
 			file.toPath()
 		}
 		Files.createDirectories(path.parent)
 		Files.writeString(
-			path, xsltArea.text,
-			StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING
+			path,
+			s.xsltArea.text,
+			StandardOpenOption.CREATE,
+			StandardOpenOption.TRUNCATE_EXISTING,
+			StandardOpenOption.WRITE
 		)
-		xsltPath = path                    // путь для следующих сеансов
-		path.registerWatch()
+		// обновляем путь в сессии и подписываемся на изменения файла
+		if (s.xsltPath != path) {
+			s.xsltPath = path
+			registerWatch(path, s, s.xsltArea)
+		}
 		saveConfig()
 		showStatus(currentStage, "XSLT сохранён:\n$path")
+	}
+
+
+	private fun registerWatch(path: Path, session: DocSession, area: CodeArea) {
+		val dir = path.parent
+		watchMap[path] = session to area
+		if (watchDirs.add(dir)) {
+			dir.register(watchService, StandardWatchEventKinds.ENTRY_MODIFY)
+		}
 	}
 
 
@@ -334,6 +404,7 @@ class XmlXsltValidatorApp : Application() {
 	 * Performs XML well-formed check, XSLT compilation & transformation
 	 */
 	private fun doTransform(owner: Stage) {
+		val s = currentSession
 		val status = StringBuilder()
 
 		try {
@@ -341,7 +412,7 @@ class XmlXsltValidatorApp : Application() {
 				isNamespaceAware = true
 				isValidating = false
 			}.newSAXParser().parse(
-				InputSource(StringReader(xmlArea.text)),
+				InputSource(StringReader(s.xmlArea.text)),
 				object : DefaultHandler() {
 					override fun warning(e: SAXParseException) {
 						status.append("WARNING in XML [line=${e.lineNumber},col=${e.columnNumber}]: ${e.message}\n")
@@ -381,7 +452,7 @@ class XmlXsltValidatorApp : Application() {
 		}
 
 		val templates = try {
-			tfFactory.newTemplates(StreamSource(StringReader(xsltArea.text))).also {
+			tfFactory.newTemplates(StreamSource(StringReader(s.xsltArea.text))).also {
 				status.append("XSLT compiled successfully.\n")
 			}
 		} catch (ex: TransformerException) {
@@ -394,7 +465,7 @@ class XmlXsltValidatorApp : Application() {
 			templates.newTransformer().apply {
 				errorListener = tfFactory.errorListener
 			}.transform(
-				StreamSource(StringReader(xmlArea.text)),
+				StreamSource(StringReader(s.xmlArea.text)),
 				StreamResult(writer)
 			)
 		} catch (ex: TransformerException) {
@@ -403,11 +474,11 @@ class XmlXsltValidatorApp : Application() {
 
 		Platform.runLater {
 			val resultText = writer.toString()
-			resultArea.replaceText(resultText)
-			highlightAllMatches(resultArea, currentQuery, true)
+			s.resultArea.replaceText(resultText)
+			highlightAllMatches(s.resultArea, currentQuery, true)
 			val nanCount = Regex("\\bNaN\\b").findAll(resultText).count()
-			nanCountLabel.text = "NaNs: $nanCount"
-			nanCountLabel.isVisible = nanCount > 0
+			s.nanCountLabel.text = "NaNs: $nanCount"
+			s.nanCountLabel.isVisible = nanCount > 0
 			showStatus(owner, status.toString())
 		}
 	}
@@ -494,7 +565,7 @@ class XmlXsltValidatorApp : Application() {
 		val closeBtn = Button("Close").apply { setOnAction { dialog.close() } }
 		field.textProperty().addListener { _, _, newValue ->
 			currentQuery = newValue
-			highlightAllMatches(target, currentQuery, target === resultArea)
+			highlightAllMatches(target, currentQuery, target === currentSession.resultArea)
 		}
 		dialog.setOnHidden {
 			searchDialog = null
@@ -636,7 +707,7 @@ class XmlXsltValidatorApp : Application() {
 
 	private fun openXPathEditor(owner: Stage) {
 		val area = currentArea ?: return
-		if (area !== xmlArea && area !== resultArea) {
+		if (area !== currentSession.xmlArea && area !== currentSession.resultArea) {
 			return
 		}
 		val meta = buildXPathWithMeta(area.text, area.selection.start)
@@ -671,6 +742,7 @@ class XmlXsltValidatorApp : Application() {
 		val resultField = TextField(meta.xpath).apply {
 			id = "xpathField"; isEditable = false
 		}
+
 		fun rebuild() {
 			val sb = StringBuilder()
 			rows.forEachIndexed { i, row ->
@@ -728,14 +800,18 @@ class XmlXsltValidatorApp : Application() {
 
 		val xpathField = TextField().apply { promptText = "Input XPath…" }
 
-		val xmlRadio = RadioButton("XML").apply { isSelected = currentArea !== resultArea }
+		val xmlRadio = RadioButton("XML").apply { isSelected = currentArea !== currentSession.resultArea }
 		val resultRadio = RadioButton("Result").apply { isSelected = !xmlRadio.isSelected }
 		ToggleGroup().also { tg -> tg.toggles.addAll(xmlRadio, resultRadio) }
 		val runBtn = Button("Run")
 		val closeBtn = Button("Close")
 		// ───────── выполнение XPath ─────────
 		runBtn.setOnAction {
-			val xmlText = if (resultRadio.isSelected) resultArea.text else xmlArea.text
+			val xmlText = if (resultRadio.isSelected) {
+				currentSession.resultArea.text
+			} else {
+				currentSession.xmlArea.text
+			}
 			val expr = xpathField.text.trim()
 			if (expr.isEmpty()) {
 				showStatus(primaryStage, "Empty expression."); return@setOnAction
@@ -891,23 +967,13 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
-	private fun Path.registerWatch() {
-		val key = parent.register(
-			watchService,
-			StandardWatchEventKinds.ENTRY_MODIFY,
-			StandardWatchEventKinds.ENTRY_DELETE
-		)
-		watchMap[key] = this        // запоминаем: по key найдём полный путь
-	}
-
-
 	private fun reloadFileIntoArea(path: Path, area: CodeArea) {
 		// читаем целиком; Platform.runLater, т.к. мы в фоновой нитке
 		try {
 			val txt = Files.readString(path)
 			Platform.runLater {
 				area.replaceText(txt)
-				highlightAllMatches(area, currentQuery, area === resultArea)
+				highlightAllMatches(area, currentQuery, area === currentSession.resultArea)
 			}
 		} catch (ex: Exception) {
 			println("Cannot read $path → ${ex.message}")
@@ -928,11 +994,25 @@ class XmlXsltValidatorApp : Application() {
 	)
 
 
+	private data class DocSession(
+		val tab: Tab,
+		val xsltArea: CodeArea,
+		val xmlArea: CodeArea,
+		val resultArea: CodeArea,
+		val nanCountLabel: Label,
+		var xmlPath: Path? = null,
+		var xsltPath: Path? = null
+	)
+
+
 	data class AppConfig(
+		val tabs: List<TabState> = emptyList(),
+		val activeIndex: Int = 0
+	)
+
+	data class TabState(
 		val xml: String? = null,
-		val xslt: String? = null,
-		val xmlDir: String? = null,
-		val xsltDir: String? = null
+		val xslt: String? = null
 	)
 
 
