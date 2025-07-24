@@ -49,8 +49,10 @@ class XmlXsltValidatorApp : Application() {
 	private val currentSession: DocSession
 		get() = sessions[tabPane.selectionModel.selectedItem]!!
 	private var currentArea: CodeArea? = null
+	private var searchInfoLabel: Label? = null
+	private var searchMatches: List<IntRange> = emptyList()
+	private var searchTarget: CodeArea? = null
 
-	//	private var currentArea: CodeArea? = null
 	private var searchDialog: Stage? = null
 	private var searchField: TextField? = null
 	private var currentQuery: String = ""
@@ -89,7 +91,7 @@ class XmlXsltValidatorApp : Application() {
 			tabClosingPolicy = TabPane.TabClosingPolicy.ALL_TABS
 		}
 		val first = createNewSessionTab("Tab 1")
-		tabPane.tabs += first.tab
+		tabPane.tabs.add(first.tab)
 		plusTab.setOnSelectionChanged {
 			if (plusTab.isSelected) {
 				val created = createNewSessionTab("Tab ${sessions.size + 1}")
@@ -97,7 +99,7 @@ class XmlXsltValidatorApp : Application() {
 				tabPane.selectionModel.select(created.tab)
 			}
 		}
-		tabPane.tabs += plusTab
+		tabPane.tabs.add(plusTab)
 
 		val topBar = buildToolBar()
 
@@ -115,7 +117,7 @@ class XmlXsltValidatorApp : Application() {
 			}
 			// если подключаете css подсветки
 			javaClass.classLoader.getResource("xml-highlighting.css")?.let {
-				stylesheets += it.toExternalForm()
+				stylesheets.add(it.toExternalForm())
 			}
 		}
 
@@ -255,9 +257,9 @@ class XmlXsltValidatorApp : Application() {
 		CodeArea().apply {
 			paragraphGraphicFactory = LineNumberFactory.get(this)
 			textProperty().addListener { _, _, _ ->
-				highlightAllMatches(this, "", highlightNaN)
+				highlightAllMatches(this, currentQuery, highlightNaN)
 			}
-			highlightAllMatches(this, "", highlightNaN)
+			highlightAllMatches(this, currentQuery, highlightNaN)
 		}
 
 	/**
@@ -287,7 +289,7 @@ class XmlXsltValidatorApp : Application() {
 		vararg masks: String
 	): FileChooser = FileChooser().apply {
 		this.title = title
-		extensionFilters += FileChooser.ExtensionFilter(description, *masks)
+		extensionFilters.add(FileChooser.ExtensionFilter(description, *masks))
 		lastPath?.parent
 			?.takeIf { Files.isDirectory(it) }
 			?.let { initialDirectory = it.toFile() }
@@ -394,7 +396,7 @@ class XmlXsltValidatorApp : Application() {
 			registerWatch(path, s, s.xsltArea)
 		}
 		saveConfig()
-		showStatus(currentStage, "XSLT сохранён:\n$path")
+		showStatus(currentStage, "XSLT saved:\n$path")
 	}
 
 
@@ -542,6 +544,7 @@ class XmlXsltValidatorApp : Application() {
 	 * Opens a modal search window for the given CodeArea
 	 */
 	private fun showSearchWindow(owner: Stage, target: CodeArea) {
+		searchTarget = target
 		if (searchDialog != null) {
 			val selected = target.selectedText.takeIf { it.isNotEmpty() } ?: ""
 			searchField?.apply {
@@ -549,6 +552,8 @@ class XmlXsltValidatorApp : Application() {
 				requestFocus()
 				selectAll()
 			}
+			searchMatches = allMatches(target.text, searchField?.text ?: "")
+			searchInfoLabel?.text = if (searchMatches.isEmpty()) "0/0" else "1/${searchMatches.size}"
 			searchDialog?.toFront()
 			searchDialog?.requestFocus()
 			return
@@ -564,20 +569,30 @@ class XmlXsltValidatorApp : Application() {
 		val field = TextField(initial).apply { promptText = "Find..." }
 		searchField = field
 		val nextBtn = Button("Find Next").apply {
-			setOnAction { search(target, field.text, forward = true) }
+			setOnAction { search(searchTarget ?: target, field.text, forward = true) }
 		}
 		val prevBtn = Button("Find Previous").apply {
-			setOnAction { search(target, field.text, forward = false) }
+			setOnAction { search(searchTarget ?: target, field.text, forward = false) }
 		}
+		val infoLbl = Label("0/0").apply {
+			minWidth = 60.0
+			alignment = Pos.CENTER
+		}
+		searchInfoLabel = infoLbl
 		val closeBtn = Button("Close").apply { setOnAction { dialog.close() } }
 		field.textProperty().addListener { _, _, newValue ->
 			currentQuery = newValue
-			highlightAllMatches(target, currentQuery, target === currentSession.resultArea)
+			val area = searchTarget ?: target
+			highlightAllMatches(area, currentQuery, area === currentSession.resultArea)
+			searchMatches = allMatches(area.text, newValue)
+			searchInfoLabel?.text = if (searchMatches.isEmpty()) "0/0" else "1/${searchMatches.size}"
 		}
 		dialog.setOnHidden {
 			searchDialog = null
 			searchField = null
-			highlightAllMatches(target, "", true)
+			searchInfoLabel = null
+			searchMatches = emptyList()
+			searchTarget = null
 		}
 		field.setOnKeyPressed { event ->
 			when {
@@ -593,8 +608,9 @@ class XmlXsltValidatorApp : Application() {
 			}
 		}
 
-		val hbox = HBox(5.0, field, nextBtn, prevBtn, closeBtn).apply {
+		val hbox = HBox(5.0, field, nextBtn, prevBtn, infoLbl, closeBtn).apply {
 			padding = Insets(10.0)
+			alignment = Pos.CENTER
 		}
 		val scene = Scene(hbox)
 		scene.setOnKeyPressed { event ->
@@ -613,28 +629,51 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
+	private fun allMatches(text: String, query: String): List<IntRange> {
+		return if (query.isBlank()) {
+			emptyList()
+		} else {
+			Regex(Regex.escape(query), RegexOption.IGNORE_CASE)
+				.findAll(text).map { it.range }.toList()
+		}
+	}
+
+
 	/**
 	 * Finds the query in the CodeArea (forward/backward) and scrolls to it
 	 */
 	private fun search(area: CodeArea, query: String, forward: Boolean) {
-		if (query.isEmpty()) return
-		val text = area.text
-		val len = query.length
-		val caret = area.caretPosition
-		val anchor = if (forward) caret else caret - len - 1
+		if (query.isBlank()) {
+			searchInfoLabel?.text = "0/0"
+			return
+		}
 
-		val idx = if (forward) {
-			text.indexOf(query, anchor.coerceAtLeast(0), ignoreCase = true)
-				.let { if (it < 0) text.indexOf(query, 0, ignoreCase = true) else it }
+		// Всегда пересчитываем список под актуальный текст
+		val matches = allMatches(area.text, query)
+		searchMatches = matches
+		val total = matches.size
+		if (total == 0) {
+			searchInfoLabel?.text = "0/0"
+			return
+		}
+
+		// Используем границы текущего выделения, а не caretPosition
+		val selStart = area.selection.start
+		val selEnd = area.selection.end
+
+		val anchor = if (forward) selEnd else (selStart - 1).coerceAtLeast(0)
+
+		var idx = if (forward) {
+			// Следующее совпадение со стартом >= anchor, иначе — первое (wrap)
+			matches.indexOfFirst { it.first >= anchor }.let { if (it == -1) 0 else it }
 		} else {
-			text.lastIndexOf(query, anchor.coerceAtLeast(-1), ignoreCase = true)
-				.let { if (it < 0) text.lastIndexOf(query, text.lastIndex, ignoreCase = true) else it }
+			// Предыдущее со стартом < anchor, иначе — последнее (wrap)
+			matches.indexOfLast { it.first < anchor }.let { if (it == -1) total - 1 else it }
 		}
-		if (idx >= 0) {
-			area.selectRange(idx, idx + len)
-			val pos = area.offsetToPosition(idx, Bias.Forward)
-			area.showParagraphAtCenter(pos.major)
-		}
+
+		val r = matches[idx]
+		showMatch(area, r.first, r.last + 1)
+		searchInfoLabel?.text = "${idx + 1}/$total"
 	}
 
 
@@ -731,9 +770,9 @@ class XmlXsltValidatorApp : Application() {
 			val lbl = Label(seg.name)
 			val cb = ChoiceBox<String>()
 			val opts = mutableListOf<String>()
-			if (seg.predicate.isNotEmpty()) opts += "по индексу ${seg.predicate}"
-			opts += "без предиката"
-			seg.attrs.forEach { (k, v) -> opts += "@$k='$v'" }
+			if (seg.predicate.isNotEmpty()) opts.add("by index ${seg.predicate}")
+			opts.add("без предиката")
+			seg.attrs.forEach { (k, v) -> opts.add("@$k='$v'") }
 			cb.items.addAll(opts); cb.value = opts[0]
 			return HBox(6.0, lbl, cb)
 		}
@@ -744,7 +783,7 @@ class XmlXsltValidatorApp : Application() {
 			isFitToWidth = true
 			hbarPolicy = ScrollPane.ScrollBarPolicy.NEVER
 		}
-		VBox.setVgrow(rowsScroll, Priority.ALWAYS)   // ← растягивается по высоте
+		VBox.setVgrow(rowsScroll, Priority.ALWAYS)
 
 		val resultField = TextField(meta.xpath).apply {
 			id = "xpathField"; isEditable = false
@@ -854,6 +893,35 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
+	/** Прокручивает и по вертикали (стандартно), и по горизонтали (вручную) к каретке. */
+	private fun CodeArea.followCaretBothAxes() {
+		// Вертикаль (и часть горизонтали) — стандартно
+		requestFollowCaret()
+		// Горизонталь — руками
+		Platform.runLater {
+			caretBounds.ifPresent { b ->
+				// хотим видеть каретку не у самого края, а с небольшим отступом
+				val targetX = kotlin.math.max(0.0, b.minX - this.width / 3.0)
+				scrollXToPixel(targetX)
+			}
+		}
+	}
+
+
+	private fun showMatch(area: CodeArea, start: Int, end: Int) {
+		area.moveTo(start)
+		area.selectRange(start, end)
+		area.followCaretBothAxes()
+	}
+
+
+	private fun findAllMatches(text: String, query: String): List<IntRange> {
+		if (query.isBlank()) return emptyList()
+		val rx = Regex(Pattern.quote(query), RegexOption.IGNORE_CASE)
+		return rx.findAll(text).map { it.range }.toList()
+	}
+
+
 	/**
 	 * Формирует абсолютный XPath до узла (или атрибута) под курсором
 	 * и возвращает метаданные сегментов для GUI-редактора.
@@ -862,9 +930,6 @@ class XmlXsltValidatorApp : Application() {
 	 * @param offset позиция курсора (selection.start) в этом тексте
 	 */
 	private fun buildXPathWithMeta(xml: String, offset: Int): XPathMeta {
-
-		/* ────────── структуры и regex ────────── */
-
 		data class Node(
 			val name: String,
 			val attrs: Map<String, String>,
@@ -874,94 +939,90 @@ class XmlXsltValidatorApp : Application() {
 			var end: Int = 0
 		)
 
-		val openRx = Regex("""<([A-Za-z_][\w\-.]*)([^>/]*?)>""")
-		val selfRx = Regex("""<([A-Za-z_][\w\-.]*)([^>]*?)/>""")
-		val closeRx = Regex("""</([A-Za-z_][\w\-.]*)\s*>""")
+		// Теперь атрибуты могут содержать любые символы, кроме '>'
+		val openRx = Regex("""<([A-Za-z_][\w:.\-]*)([^>]*?)>""")
+		val selfRx = Regex("""<([A-Za-z_][\w:.\-]*)([^>]*?)/>""")
+		val closeRx = Regex("""</([A-Za-z_][\w:.\-]*)\s*>""")
 		val attrRx = Regex("""([\w:-]+)\s*=\s*(['"])(.*?)\2""")
 
 		fun attrsOf(tag: String) =
 			attrRx.findAll(tag).associate { it.groupValues[1] to it.groupValues[3] }
 
-		/* ────────── строим дерево только до offset ────────── */
-
+		// «Технический» корень
 		val root = Node("ROOT", emptyMap())
-		var cur = root                                 // вершина стека
+		var cur = root
 		var i = 0
 
+		// Строим дерево до позиции курсора
 		while (i < xml.length) {
 			val lt = xml.indexOf('<', i).takeIf { it >= 0 } ?: break
-			if (offset in i until lt) break              // курсор попал в текст
-
+			if (offset in i until lt) break
 			when {
-				/* <tag .../> */
 				selfRx.matchAt(xml, lt) != null -> {
 					val m = selfRx.matchAt(xml, lt)!!
 					val nod = Node(
-						m.groupValues[1], attrsOf(m.value),
-						start = m.range.first, end = m.range.last,
+						m.groupValues[1],
+						attrsOf(m.value),
+						start = m.range.first,
+						end = m.range.last,
 						parent = cur
 					)
-					cur.children += nod
+					cur.children.add(nod)
 					i = m.range.last + 1
 				}
 
-				/* <tag ...> */
 				openRx.matchAt(xml, lt) != null -> {
 					val m = openRx.matchAt(xml, lt)!!
 					val nod = Node(
-						m.groupValues[1], attrsOf(m.value),
-						start = m.range.first, parent = cur
+						m.groupValues[1],
+						attrsOf(m.value),
+						start = m.range.first,
+						parent = cur
 					)
-					cur.children += nod
-					cur = nod                            // пуш
+					cur.children.add(nod)
+					cur = nod
 					i = m.range.last + 1
 				}
 
-				/* </tag> */
 				closeRx.matchAt(xml, lt) != null -> {
 					val m = closeRx.matchAt(xml, lt)!!
 					cur.end = m.range.last
-					cur = cur.parent ?: root        // поп
+					cur = cur.parent ?: root
 					i = m.range.last + 1
 				}
 
-				else -> i = lt + 1                      // не тег
+				else -> i = lt + 1
 			}
 		}
 
-		/* ────────── ищем путь до узла под offset ────────── */
-
+		// Ищем путь до узла под курсором
+		val chain = mutableListOf<Node>()
 		fun findPath(n: Node, path: MutableList<Node>): Boolean {
 			if (offset !in n.start..(n.end.takeIf { it > 0 } ?: Int.MAX_VALUE)) return false
-			path += n
+			path.add(n)
 			for (c in n.children) if (findPath(c, path)) return true
 			return true
 		}
+		if (!findPath(root, chain) || chain.size <= 1) {
+			return XPathMeta("/", emptyList())
+		}
 
-		val chain = mutableListOf<Node>()
-		findPath(root, chain)
-		if (chain.size <= 1) return XPathMeta("/", emptyList())  // курсор вне тегов
-
-		/* ────────── атрибут под курсором? ────────── */
-
+		// Предикат по атрибуту, если курсор внутри @…
 		var attrPred = ""
 		run {
-			val tagStart = xml.lastIndexOf('<', offset).coerceAtLeast(0)
-			val tagEnd = xml.indexOf('>', tagStart).coerceAtLeast(tagStart)
-			if (offset in tagStart..tagEnd) {
-				attrRx.findAll(xml.substring(tagStart, tagEnd + 1)).forEach { a ->
-					val s = tagStart + a.range.first
-					val e = tagStart + a.range.last
+			val ts = xml.lastIndexOf('<', offset).coerceAtLeast(0)
+			val te = xml.indexOf('>', ts).coerceAtLeast(ts)
+			if (offset in ts..te) {
+				attrRx.findAll(xml.substring(ts, te + 1)).forEach { a ->
+					val s = ts + a.range.first
+					val e = ts + a.range.last
 					if (offset in s..e) attrPred = "/@${a.groupValues[1]}"
 				}
 			}
 		}
-
-		/* ────────── формируем сегменты и XPath ────────── */
-
 		val segs = chain.drop(1).map { n ->
-			val sameName = n.parent!!.children.filter { it.name == n.name }
-			val idx = sameName.indexOf(n) + 1
+			val siblings = n.parent!!.children.filter { it.name == n.name }
+			val idx = siblings.indexOf(n) + 1
 			SegMeta(n.name, "[$idx]", n.attrs)
 		}
 
@@ -969,7 +1030,6 @@ class XmlXsltValidatorApp : Application() {
 			segs.forEach { append('/').append(it.name).append(it.predicate) }
 			append(attrPred)
 		}
-
 		return XPathMeta(xpath, segs)
 	}
 
@@ -1001,7 +1061,7 @@ class XmlXsltValidatorApp : Application() {
 		val resultArea: CodeArea,
 		val nanCountLabel: Label,
 		var xmlPath: Path? = null,
-		var xsltPath: Path? = null
+		var xsltPath: Path? = null,
 	)
 
 
