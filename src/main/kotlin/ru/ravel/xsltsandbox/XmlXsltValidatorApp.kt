@@ -159,7 +159,10 @@ class XmlXsltValidatorApp : Application() {
 					"Open XSLT…", currentSession.xsltPath,
 					"XSLT Files (*.xsl, *.xslt)", "*.xsl", "*.xslt"
 				).showOpenDialog(currentStage) ?: return@setOnAction
-				loadFileIntoArea(currentSession, file.toPath(), currentSession.xsltArea) { currentSession.xsltPath = it }
+				loadFileIntoArea(currentSession, file.toPath(), currentSession.xsltArea) { path ->
+					currentSession.xsltPath = path
+					currentSession.updateTabTitle()
+				}
 			}
 		}
 		val saveXsltBtn = Button("Save XSLT…").apply {
@@ -347,6 +350,7 @@ class XmlXsltValidatorApp : Application() {
 		tabPane.selectionModel.select(workTabs[toSelect])
 	}
 
+
 	private fun loadTabStateIntoSession(session: DocSession, state: TabState) {
 		state.xml?.let { p ->
 			val path = Paths.get(p)
@@ -357,7 +361,10 @@ class XmlXsltValidatorApp : Application() {
 		state.xslt?.let { p ->
 			val path = Paths.get(p)
 			if (Files.exists(path)) {
-				loadFileIntoArea(session, path, session.xsltArea) { session.xsltPath = it }
+				loadFileIntoArea(session, path, session.xsltArea) { loaded ->
+					session.xsltPath = loaded
+					session.updateTabTitle()
+				}
 			}
 		}
 	}
@@ -967,17 +974,10 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
-	private fun reloadFileIntoArea(path: Path, area: CodeArea) {
-		// читаем целиком; Platform.runLater, т.к. мы в фоновой нитке
-		try {
-			val txt = Files.readString(path)
-			Platform.runLater {
-				area.replaceText(txt)
-				highlightAllMatches(area, currentQuery, area === currentSession.resultArea)
-			}
-		} catch (ex: Exception) {
-			println("Cannot read $path → ${ex.message}")
-		}
+	private fun DocSession.updateTabTitle() {
+		val name = xsltPath?.fileName?.toString() ?: return
+		tab.text = name
+		tab.tooltip = Tooltip(xsltPath.toString())
 	}
 
 
