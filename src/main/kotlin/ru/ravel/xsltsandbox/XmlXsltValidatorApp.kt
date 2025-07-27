@@ -9,14 +9,14 @@ import javafx.geometry.Insets
 import javafx.geometry.Orientation
 import javafx.geometry.Pos
 import javafx.scene.Scene
+import javafx.scene.canvas.Canvas
+import javafx.scene.canvas.GraphicsContext
 import javafx.scene.control.*
 import javafx.scene.input.Clipboard
 import javafx.scene.input.KeyCode
 import javafx.scene.input.KeyEvent
-import javafx.scene.layout.BorderPane
-import javafx.scene.layout.HBox
-import javafx.scene.layout.Priority
-import javafx.scene.layout.VBox
+import javafx.scene.layout.*
+import javafx.scene.paint.Color
 import javafx.stage.FileChooser
 import javafx.stage.Modality
 import javafx.stage.Stage
@@ -25,6 +25,7 @@ import org.fxmisc.flowless.VirtualizedScrollPane
 import org.fxmisc.richtext.CodeArea
 import org.fxmisc.richtext.LineNumberFactory
 import org.fxmisc.richtext.model.StyleSpansBuilder
+import org.fxmisc.richtext.model.TwoDimensional
 import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
@@ -96,6 +97,7 @@ class XmlXsltValidatorApp : Application() {
 		}
 		val first = createNewSessionTab("Tab 1")
 		tabPane.tabs.add(first.tab)
+		tabPane.selectionModel.select(first.tab)
 		plusTab.setOnSelectionChanged {
 			if (plusTab.isSelected) {
 				val created = createNewSessionTab("Tab ${sessions.size + 1}")
@@ -197,8 +199,27 @@ class XmlXsltValidatorApp : Application() {
 
 	private fun createNewSessionTab(title: String): DocSession {
 		val xsltArea = createHighlightingCodeArea(false)
+		val xsltScroll = VirtualizedScrollPane(xsltArea).apply { minWidth = 0.0 }
+		val xsltOverlay = Canvas().apply { isMouseTransparent = true }
+		val xsltStack = StackPane(xsltScroll, xsltOverlay).apply {
+			minWidth = 0.0
+			minHeight = 0.0
+		}
+		xsltOverlay.widthProperty().bind(xsltStack.widthProperty())
+		xsltOverlay.heightProperty().bind(xsltStack.heightProperty())
+		StackPane.setAlignment(xsltOverlay, Pos.TOP_LEFT)
+		StackPane.setAlignment(xsltScroll, Pos.TOP_LEFT)
+
+		VBox.setVgrow(xsltStack, Priority.ALWAYS)
+		val xsltBox = VBox(4.0, Label("XSLT"), xsltStack).apply {
+			padding = Insets(8.0)
+			minWidth = 0.0
+		}
 		val xmlArea = createHighlightingCodeArea(false)
-		val resultArea = createHighlightingCodeArea(true).apply { isEditable = false }
+		val resultArea = createHighlightingCodeArea(true).apply {
+			isEditable = false
+			minHeight = 0.0
+		}
 
 		// чтобы Ctrl+F искал по активной области
 		listOf(xsltArea, xmlArea, resultArea).forEach { area ->
@@ -206,7 +227,6 @@ class XmlXsltValidatorApp : Application() {
 			area.addEventHandler(KeyEvent.KEY_PRESSED) { currentArea = area }
 		}
 
-		val xsltBox = vBoxWithLabel("XSLT", xsltArea)
 		val xmlBox = vBoxWithLabel("XML", xmlArea)
 
 		val nanCountLabel = Label().apply {
@@ -215,17 +235,29 @@ class XmlXsltValidatorApp : Application() {
 		}
 		val resultLabel = Label("Result")
 		val resultHeader = HBox(4.0, resultLabel, nanCountLabel).apply { alignment = Pos.CENTER_LEFT }
-		val resultScroll = VirtualizedScrollPane(resultArea)
+		val resultScroll = VirtualizedScrollPane(resultArea).apply {
+			minHeight = 0.0
+		}
 		VBox.setVgrow(resultScroll, Priority.ALWAYS)
-		val resultBox = VBox(4.0, resultHeader, resultScroll).apply { padding = Insets(8.0) }
+		val resultBox = VBox(4.0, resultHeader, resultScroll).apply {
+			padding = Insets(8.0)
+			minHeight = 0.0
+		}
 
 		val topSplit = SplitPane(xsltBox, xmlBox).apply {
 			orientation = Orientation.HORIZONTAL
 			setDividerPositions(0.5)
+			minHeight = 0.0
 		}
 		val mainSplit = SplitPane(topSplit, resultBox).apply {
 			orientation = Orientation.VERTICAL
-			setDividerPositions(0.7)
+			setDividerPositions(0.5)
+		}
+
+		mainSplit.sceneProperty().addListener { _, _, scene ->
+			if (scene != null) {
+				Platform.runLater { mainSplit.setDividerPositions(0.5) }
+			}
 		}
 
 		val tab = Tab(title, mainSplit).apply {
@@ -241,6 +273,8 @@ class XmlXsltValidatorApp : Application() {
 		}
 
 		val session = DocSession(tab, xsltArea, xmlArea, resultArea, nanCountLabel)
+		session.xsltOverlay = xsltOverlay
+		hookOverlayRedraw(session)
 		sessions[tab] = session
 		return session
 	}
@@ -359,9 +393,12 @@ class XmlXsltValidatorApp : Application() {
 	 */
 	private fun vBoxWithLabel(labelText: String, area: CodeArea): VBox {
 		val label = Label(labelText)
-		val scrolled = VirtualizedScrollPane(area)
+		val scrolled = VirtualizedScrollPane(area).apply { minWidth = 0.0 }
 		VBox.setVgrow(scrolled, Priority.ALWAYS)
-		return VBox(4.0, label, scrolled).apply { padding = Insets(8.0) }
+		return VBox(4.0, label, scrolled).apply {
+			padding = Insets(8.0)
+			minWidth = 0.0
+		}
 	}
 
 
@@ -544,6 +581,9 @@ class XmlXsltValidatorApp : Application() {
 	private fun doTransform(owner: Stage) {
 		val s = currentSession
 		val status = StringBuilder()
+		val saxonWarnAcc = mutableListOf<IntRange>()
+		val saxonErrAcc = mutableListOf<IntRange>()
+		val saxonFatalAcc = mutableListOf<IntRange>()
 
 		try {
 			SAXParserFactory.newInstance().apply {
@@ -575,15 +615,27 @@ class XmlXsltValidatorApp : Application() {
 			XmlXsltValidatorApp::class.java.classLoader
 		).apply {
 			errorListener = object : ErrorListener {
-				override fun warning(ex: TransformerException) = report("WARNING in XSLT", ex)
-				override fun error(ex: TransformerException) = report("ERROR   in XSLT", ex)
-				override fun fatalError(ex: TransformerException) = report("FATAL   in XSLT", ex)
-				private fun report(level: String, ex: TransformerException) {
+				override fun warning(ex: TransformerException) = report(Sev.WARNING, ex)
+				override fun error(ex: TransformerException) = report(Sev.ERROR, ex)
+				override fun fatalError(ex: TransformerException) = report(Sev.FATAL, ex)
+
+				private fun report(sev: Sev, ex: TransformerException) {
 					val loc = ex.locator
+					val levelText = when (sev) {
+						Sev.WARNING -> "WARNING in XSLT"
+						Sev.ERROR -> "ERROR   in XSLT"
+						Sev.FATAL -> "FATAL   in XSLT"
+					}
 					if (loc != null) {
-						status.append("$level [line=${loc.lineNumber},col=${loc.columnNumber}]: ${ex.message}\n")
+						status.append("$levelText [line=${loc.lineNumber},col=${loc.columnNumber}]: ${ex.message}\n")
+						val r = computeXsltErrorRange(s.xsltArea.text, loc.lineNumber, loc.columnNumber)
+						when (sev) {
+							Sev.WARNING -> saxonWarnAcc += r
+							Sev.ERROR -> saxonErrAcc += r
+							Sev.FATAL -> saxonFatalAcc += r
+						}
 					} else {
-						status.append("$level: ${ex.message}\n")
+						status.append("$levelText: ${ex.message}\n")
 					}
 				}
 			}
@@ -592,8 +644,18 @@ class XmlXsltValidatorApp : Application() {
 		val templates = try {
 			tfFactory.newTemplates(StreamSource(StringReader(s.xsltArea.text))).also {
 				status.append("XSLT compiled successfully.\n")
+				s.xsltWarningRanges = saxonWarnAcc
+				s.xsltSyntaxErrorRanges = saxonErrAcc + saxonFatalAcc
+				highlightAllMatches(s.xsltArea, currentQuery, false)
+				appendBadSelectWarnings(s, status)
+				Platform.runLater { redrawXsltOverlay(s) }
 			}
 		} catch (ex: TransformerException) {
+			s.xsltWarningRanges = saxonWarnAcc
+			s.xsltSyntaxErrorRanges = saxonErrAcc + saxonFatalAcc
+			highlightAllMatches(s.xsltArea, currentQuery, false)
+			appendBadSelectWarnings(s, status)
+			Platform.runLater { redrawXsltOverlay(s) }
 			showStatus(owner, status.toString())
 			return
 		}
@@ -618,7 +680,273 @@ class XmlXsltValidatorApp : Application() {
 			s.nanCountLabel.text = "NaNs: $nanCount"
 			s.nanCountLabel.isVisible = nanCount > 0
 			showStatus(owner, status.toString())
+			appendBadSelectWarnings(s, status)
 		}
+	}
+
+
+	private fun stripStringLiterals(s: String): String {
+		val out = StringBuilder(s.length)
+		var i = 0
+		while (i < s.length) {
+			val ch = s[i]
+			if (ch == '\'' || ch == '"') {
+				out.append(' ')
+				i++
+				while (i < s.length) {
+					val d = s[i]
+					out.append(' ')
+					i++
+					if (d == ch) break
+				}
+			} else {
+				out.append(ch)
+				i++
+			}
+		}
+		return out.toString()
+	}
+
+
+	/**
+	 * Проверка «умным» правилом: абсолютен ли путь или «якорен» функцией
+	 */
+	private fun isOkBySmartRule(expr: String, opt: SmartOptions): Boolean {
+		val t = expr.trim()
+		if (t.isEmpty()) return true
+
+		val clean = stripStringLiterals(t)
+
+		// Явно абсолютные пути
+		if (clean.startsWith("/")) return true         // /... или //...
+		// Абсолютный путь как аргумент функции: ищем '/' сразу после начала/скобки/запятой
+		if (Regex("(^|[,(])\\s*/").containsMatchIn(clean)) return true
+
+		// root()/..., doc()/..., document()/...
+		if (Regex("\\b(?:fn:)?(?:root|doc(?:ument)?)\\s*\\(").containsMatchIn(clean) && clean.contains(")")) {
+			return true
+		}
+
+		// «Короткий» доступ к атрибуту: @id
+		if (opt.allowAttributeShortcut && Regex("^\\s*@[\\w:.-]+\\s*(\\|\\s*@[\\w:.-]+\\s*)*\$").matches(clean)) {
+			return true
+		}
+
+		// Явные относительные конструкции — считаем нарушением (если не разрешены)
+		if (!opt.allowDot && (clean == "." || clean.startsWith("./"))) return false
+		if (!opt.allowDotDot && (clean.startsWith(".."))) return false
+
+		// Иначе — относительное выражение
+		return false
+	}
+
+	/**
+	 * Ищет все xsl:value-of/@select, которые НЕ проходят умную проверку.
+	 */
+	private fun collectBadValueOfSelectsSmart(xsltText: String, opt: SmartOptions): List<ValueOfWarning> {
+		val re = Regex(
+			"""<(?:(?:xsl:)?value-of)\b[^>]*\bselect\s*=\s*(["'])(.*?)\1""",
+			setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+		)
+		val out = mutableListOf<ValueOfWarning>()
+		for (m in re.findAll(xsltText)) {
+			val valGroup = m.groups[2] ?: continue
+			val raw = valGroup.value
+			if (!isOkBySmartRule(raw, opt)) {
+				val start = valGroup.range.first
+				val before = xsltText.substring(0, start)
+				val line = before.count { it == '\n' } + 1
+				val lastNl = before.lastIndexOf('\n')
+				val col = if (lastNl >= 0) (start - lastNl) else (start + 1)
+				out += ValueOfWarning(valGroup.range, line, col, raw)
+			}
+		}
+		return out
+	}
+
+
+	/** Старт и конец (исключительно) строки lineIdx (0-based) в тексте */
+	private fun lineBounds(text: String, lineIdx: Int): IntRange {
+		var start = 0
+		repeat(lineIdx) {
+			val nl = text.indexOf('\n', start)
+			if (nl < 0) return (text.length..text.length)
+			start = nl + 1
+		}
+		val end = text.indexOf('\n', start).let { if (it < 0) text.length else it }
+		return start until end
+	}
+
+
+	/** Смещает в абсолютный offset; colIdx может быть 0 при loc.columnNumber=0 */
+	private fun offsetFor(text: String, lineIdx: Int, colIdx: Int): Int {
+		val lb = lineBounds(text, lineIdx)
+		val base = lb.first
+		// защищаемся от выхода за границы строки
+		return (base + colIdx).coerceIn(lb.first, lb.last)
+	}
+
+
+	/** Возвращает диапазон символов, который стоит подчеркнуть для ошибки Saxon */
+	private fun computeXsltErrorRange(xslt: String, lineNo: Int, colNo: Int): IntRange {
+		val lineIdx = (lineNo - 1).coerceAtLeast(0)
+		val colIdx = (colNo - 1).coerceAtLeast(0)
+
+		// Если колонка известна (>0) — хотя бы 1 символ там
+		if (colNo > 0) {
+			val pos = offsetFor(xslt, lineIdx, colIdx)
+			return pos..(pos + 1)
+		}
+
+		// col==0 → эвристика: подсветить значение match|select|test|use-when в этой строке
+		val lb = lineBounds(xslt, lineIdx)
+		val line = xslt.substring(lb.first, lb.last)
+		val m = Regex("""\b(match|select|test|use-when)\s*=\s*(["'])(.*?)\2""")
+			.find(line)
+		if (m != null) {
+			val valRangeInLine = m.groups[3]!!.range // только содержимое в кавычках
+			val start = lb.first + valRangeInLine.first
+			val endEx = lb.first + valRangeInLine.last + 1
+			return start until endEx
+		}
+
+		// запасной вариант — первый символ тега в строке
+		val lt = line.indexOf('<')
+		val pos = if (lt >= 0) lb.first + lt else lb.first
+		return pos..(pos + 1)
+	}
+
+
+	private fun appendBadSelectWarnings(
+		session: DocSession,
+		status: StringBuilder
+	) {
+		val smart = SmartOptions(
+			allowAttributeShortcut = true,
+			allowDot = false,
+			allowDotDot = false
+		)
+		val bad = collectBadValueOfSelectsSmart(session.xsltArea.text, smart)
+		session.xsltBadSelectRanges = bad.map { it.range }
+		bad.forEach { w ->
+			status.append(
+				"WARNING in XSLT [line=${w.line},col=${w.col}]: xsl:value-of select='${w.raw}' не является абсолютным/якорным.\n"
+			)
+		}
+		highlightAllMatches(session.xsltArea, currentQuery, false)
+		Platform.runLater { redrawXsltOverlay(session) }
+	}
+
+
+	/** Вызывает перерисовку при скролле/изменениях размера/текста */
+	private fun hookOverlayRedraw(s: DocSession) {
+		val area = s.xsltArea
+		val overlay = s.xsltOverlay ?: return
+
+		var dirty = true
+		val timer = object : AnimationTimer() {
+			override fun handle(now: Long) {
+				if (dirty) {
+					dirty = false
+					redrawXsltOverlay(s)
+				}
+			}
+		}
+		timer.start()
+
+		val markDirty: () -> Unit = { dirty = true }
+
+		overlay.widthProperty().addListener { _, _, _ -> markDirty() }
+		overlay.heightProperty().addListener { _, _, _ -> markDirty() }
+
+		area.estimatedScrollXProperty().addListener { _, _, _ -> markDirty() }
+		area.estimatedScrollYProperty().addListener { _, _, _ -> markDirty() }
+		area.widthProperty().addListener { _, _, _ -> markDirty() }
+		area.heightProperty().addListener { _, _, _ -> markDirty() }
+		area.textProperty().addListener { _, _, _ -> markDirty() }
+	}
+
+
+	/** Главный рендер: ошибки красным, предупреждения оранжевым */
+	private fun redrawXsltOverlay(s: DocSession) {
+		val area = s.xsltArea
+		val overlay = s.xsltOverlay ?: return
+		val gc = overlay.graphicsContext2D
+
+		// Очистка
+		gc.clearRect(0.0, 0.0, overlay.width, overlay.height)
+
+		// Собираем предупреждения (включая «умные» предупреждения про select)
+		val warnRanges = s.xsltWarningRanges + s.xsltBadSelectRanges
+		warnRanges.forEach { r -> drawUnderlineForRange(area, overlay, r.first, r.last + 1, Color.ORANGE) }
+		s.xsltSyntaxErrorRanges.forEach { r -> drawUnderlineForRange(area, overlay, r.first, r.last + 1, Color.RED) }
+	}
+
+	/** Рисует подчёркивание для диапазона, разбивая по параграфам */
+	private fun drawUnderlineForRange(
+		area: CodeArea,
+		overlay: Canvas,
+		start: Int,
+		endEx: Int,
+		color: Color
+	) {
+		if (start >= endEx) return
+
+		val sPos = area.offsetToPosition(start, TwoDimensional.Bias.Forward)
+		val ePos = area.offsetToPosition(endEx, TwoDimensional.Bias.Backward)
+		val gc = overlay.graphicsContext2D
+
+		for (par in sPos.major..ePos.major) {
+			val parStart = if (par == sPos.major) start else area.getAbsolutePosition(par, 0)
+			val parEnd = if (par == ePos.major) endEx else area.getAbsolutePosition(par, area.getParagraphLength(par))
+			if (parStart >= parEnd) continue
+
+			val bScreenOpt = area.getCharacterBoundsOnScreen(parStart, parEnd)
+			if (!bScreenOpt.isPresent) continue
+			val bScreen = bScreenOpt.get()
+
+			// screen -> scene -> overlay
+			val root = overlay.scene.root
+			val bScene = root.screenToLocal(bScreen)
+			val b = overlay.sceneToLocal(bScene)
+
+			drawZigZag(gc, b.minX, b.maxX, b.maxY + UNDER_OFFSET, color)
+		}
+	}
+
+	/** Треугольная волна */
+	private fun drawZigZag(
+		gc: GraphicsContext,
+		x0: Double,
+		x1: Double,
+		y: Double,
+		color: Color
+	) {
+		val step = UNDER_STEP
+		val amp = UNDER_AMP
+		if (x1 - x0 <= 1.0) return
+
+		gc.stroke = color
+		gc.lineWidth = UNDER_WIDTH
+		gc.beginPath()
+		var x = x0
+		var sign = 1.0
+		gc.moveTo(x, y)
+
+		while (x + step <= x1) {
+			val mid = x + step / 2.0
+			gc.lineTo(mid, y - amp * sign)
+			gc.lineTo(x + step, y)
+			sign = -sign
+			x += step
+		}
+		// Хвост
+		if (x < x1) {
+			val mid = (x + x1) / 2.0
+			gc.lineTo(mid, y - amp * sign)
+			gc.lineTo(x1, y)
+		}
+		gc.stroke()
 	}
 
 
@@ -1136,7 +1464,9 @@ class XmlXsltValidatorApp : Application() {
 
 		while (i < xml.length && pathAtOffset == null) {
 			val lt = xml.indexOf('<', i)
-			if (lt < 0) break
+			if (lt < 0) {
+				break
+			}
 
 			// offset в тексте между тегами — путь это текущий стек
 			if (offset in i until lt) {
@@ -1262,12 +1592,30 @@ class XmlXsltValidatorApp : Application() {
 
 	private data class DocSession(
 		val tab: Tab,
-		val xsltArea: CodeArea,
+		var xsltArea: CodeArea,
 		val xmlArea: CodeArea,
 		val resultArea: CodeArea,
 		val nanCountLabel: Label,
 		var xmlPath: Path? = null,
 		var xsltPath: Path? = null,
+		var xsltSyntaxErrorRanges: List<IntRange> = emptyList(),
+		var xsltBadSelectRanges: List<IntRange> = emptyList(),
+		var xsltWarningRanges: List<IntRange> = emptyList(),
+		var xsltOverlay: Canvas? = null,
+	)
+
+
+	private data class SmartOptions(
+		val allowAttributeShortcut: Boolean = true, // @id — ок
+		val allowDot: Boolean = false,              // .  — относит. (по умолчанию ругаемся)
+		val allowDotDot: Boolean = false            // .. — относит. (по умолчанию ругаемся)
+	)
+
+	private data class ValueOfWarning(
+		val range: IntRange, // диапазон в XSLT тексте — для подчёркивания
+		val line: Int,       // 1-based
+		val col: Int,        // 1-based
+		val raw: String      // исходное значение @select
 	)
 
 
@@ -1282,6 +1630,14 @@ class XmlXsltValidatorApp : Application() {
 	)
 
 
+	private enum class Sev {
+		WARNING,
+		ERROR,
+		FATAL,
+		;
+	}
+
+
 	companion object {
 		private val XML_PATTERN: Pattern = Pattern.compile(
 			"(?<COMMENT><!--[\\s\\S]*?-->)" +
@@ -1292,6 +1648,10 @@ class XmlXsltValidatorApp : Application() {
 					"|(?<VALUE>\"[^\"]*\")" +
 					"|(?<BRACKET>/?>)"
 		)
+		private const val UNDER_OFFSET = 0.0   // отступ под текстом (px)
+		private const val UNDER_WIDTH = 1.0  // толщина линии
+		private const val UNDER_STEP = 3.0   // горизонтальный шаг «зубцов»
+		private const val UNDER_AMP = 1.0   // амплитуда (высота «зубца»)
 	}
 }
 

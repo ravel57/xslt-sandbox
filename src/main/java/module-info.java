@@ -9,6 +9,7 @@ module ru.ravel.xsltsandbox {
 	requires com.fasterxml.jackson.databind;
 	requires Saxon.HE;
 	requires tagsoup;
+	requires reactfx;
 
 
 	opens ru.ravel.xsltsandbox to javafx.fxml, com.fasterxml.jackson.databind;
