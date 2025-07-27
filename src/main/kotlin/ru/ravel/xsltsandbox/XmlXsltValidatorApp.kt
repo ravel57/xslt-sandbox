@@ -20,7 +20,7 @@ import javafx.scene.layout.VBox
 import javafx.stage.FileChooser
 import javafx.stage.Modality
 import javafx.stage.Stage
-import net.sf.saxon.s9api.Processor
+import net.sf.saxon.s9api.*
 import org.fxmisc.flowless.VirtualizedScrollPane
 import org.fxmisc.richtext.CodeArea
 import org.fxmisc.richtext.LineNumberFactory
@@ -37,6 +37,7 @@ import javax.xml.parsers.SAXParserFactory
 import javax.xml.transform.ErrorListener
 import javax.xml.transform.TransformerException
 import javax.xml.transform.TransformerFactory
+import javax.xml.transform.sax.SAXSource
 import javax.xml.transform.stream.StreamResult
 import javax.xml.transform.stream.StreamSource
 
@@ -889,7 +890,8 @@ class XmlXsltValidatorApp : Application() {
 		VBox.setVgrow(rowsScroll, Priority.ALWAYS)
 
 		val resultField = TextField(meta.xpath).apply {
-			id = "xpathField"; isEditable = false
+			id = "xpathField"
+			isEditable = true
 		}
 
 		fun rebuild() {
@@ -900,9 +902,7 @@ class XmlXsltValidatorApp : Application() {
 				sb.append('/').append(name)
 				when {
 					sel.startsWith("@") -> sb.append("[$sel]")
-					sel.startsWith("по индексу") ->
-						sb.append(meta.segs[i].predicate)
-					/* «без предиката» – ничего */
+					sel.startsWith("by index") -> sb.append(meta.segs[i].predicate)
 				}
 			}
 			resultField.text = sb.toString()
@@ -930,7 +930,9 @@ class XmlXsltValidatorApp : Application() {
 			})
 			/* Esc — закрыть */
 			scene.setOnKeyPressed { ev ->
-				if (ev.code == KeyCode.ESCAPE) close()
+				if (ev.code == KeyCode.ESCAPE) {
+					close()
+				}
 			}
 			setOnHidden { searchDialog = null }
 			sizeToScene()
@@ -949,9 +951,18 @@ class XmlXsltValidatorApp : Application() {
 
 		val xpathField = TextField().apply { promptText = "Input XPath…" }
 
-		val xmlRadio = RadioButton("XML").apply { isSelected = currentArea !== currentSession.resultArea }
-		val resultRadio = RadioButton("Result").apply { isSelected = !xmlRadio.isSelected }
-		ToggleGroup().also { tg -> tg.toggles.addAll(xmlRadio, resultRadio) }
+		val xmlRadio = RadioButton("XML")
+		val resultRadio = RadioButton("Result")
+		val tg = ToggleGroup().also { g ->
+			xmlRadio.toggleGroup = g
+			resultRadio.toggleGroup = g
+		}
+		if (currentArea === currentSession.resultArea) {
+			tg.selectToggle(resultRadio)
+		} else {
+			tg.selectToggle(xmlRadio)
+		}
+
 		val runBtn = Button("Run")
 		val closeBtn = Button("Close")
 		// ───────── выполнение XPath ─────────
@@ -963,13 +974,14 @@ class XmlXsltValidatorApp : Application() {
 			}
 			val expr = xpathField.text.trim()
 			if (expr.isEmpty()) {
-				showStatus(primaryStage, "Empty expression."); return@setOnAction
+				showStatus(primaryStage, "Empty expression.")
+				return@setOnAction
 			}
 			try {
 				val proc = Processor(false)
-				val builder = proc.newDocumentBuilder()
-				val doc = builder.build(StreamSource(StringReader(xmlText)))
+				val doc = buildDocForXPath(proc, xmlText)
 				val compiler = proc.newXPathCompiler()
+				setDefaultNsFromDoc(compiler, doc)
 				val value = compiler.evaluate(expr, doc)
 
 				val out = buildString { value.forEach { append(it.stringValue).append('\n') } }
@@ -982,17 +994,69 @@ class XmlXsltValidatorApp : Application() {
 		}
 		closeBtn.setOnAction { dlg.close() }
 
-		dlg.scene = Scene(
-			VBox(
-				10.0,
-				xpathField,
-				HBox(10.0, xmlRadio, resultRadio),
-				HBox(10.0, runBtn, closeBtn)
-			).apply { padding = Insets(12.0) }
-		).also { sc ->
+		val root = VBox(
+			10.0,
+			xpathField,
+			HBox(10.0, xmlRadio, resultRadio),
+			HBox(10.0, runBtn, closeBtn)
+		).apply { padding = Insets(12.0) }
+
+		dlg.scene = Scene(root).also { sc ->
 			sc.setOnKeyPressed { if (it.code == KeyCode.ESCAPE) dlg.close() }
 		}
 		dlg.show()
+	}
+
+	/**
+	 * Универсальный разбор текста для XPath: сначала XML; если похоже на HTML — TagSoup;
+	 * иначе — оборачиваем XML‑фрагмент без корня и вырезаем DOCTYPE.
+	 * */
+	private fun buildDocForXPath(proc: Processor, text: String): XdmNode {
+		val builder = proc.newDocumentBuilder()
+		val trimmed = text.trim()
+		require(trimmed.isNotEmpty()) { "Selected text is empty." }
+
+		// 1) Обычный XML
+		try {
+			return builder.build(StreamSource(StringReader(trimmed)))
+		} catch (_: SaxonApiException) {
+			// пробуем дальше
+		}
+
+		// 2) HTML → TagSoup
+		val looksHtml =
+			Regex("""<!DOCTYPE\s+html""", RegexOption.IGNORE_CASE).containsMatchIn(trimmed) ||
+					Regex("""<html(\s|>)""", RegexOption.IGNORE_CASE).containsMatchIn(trimmed) ||
+					Regex("""<body(\s|>)""", RegexOption.IGNORE_CASE).containsMatchIn(trimmed)
+		if (looksHtml) {
+			val parser = org.ccil.cowan.tagsoup.Parser()
+			val src = SAXSource(parser, InputSource(StringReader(trimmed)))
+			return builder.build(src)
+		}
+
+		// 3) XML‑фрагмент без общего корня
+		val noDoctype = trimmed.replace(Regex("""<!DOCTYPE[\s\S]*?>""", RegexOption.IGNORE_CASE), "")
+		val wrapped = "<__root>$noDoctype</__root>"
+		return builder.build(StreamSource(StringReader(wrapped)))
+	}
+
+	/**
+	 * Автонастройка default element namespace для XPath из корневого элемента документа.
+	 * Для HTML (TagSoup/XHTML) это включит поддержку выражений без префикса: //h1, //section/p.
+	 * */
+	private fun setDefaultNsFromDoc(compiler: XPathCompiler, doc: XdmNode) {
+		val it = doc.axisIterator(Axis.CHILD)
+		while (it.hasNext()) {
+			val n = it.next() as XdmNode
+			if (n.nodeKind == XdmNodeKind.ELEMENT) {
+				val ns = n.nodeName?.namespaceUri?.toString()
+				if (!ns.isNullOrEmpty()) {
+					compiler.declareNamespace("", ns)
+					compiler.declareNamespace("h", ns)
+				}
+				break
+			}
+		}
 	}
 
 
@@ -1026,16 +1090,15 @@ class XmlXsltValidatorApp : Application() {
 	 * @param offset позиция курсора (selection.start) в этом тексте
 	 */
 	private fun buildXPathWithMeta(xml: String, offset: Int): XPathMeta {
-		data class Node(
+		data class Frame(
 			val name: String,
 			val attrs: Map<String, String>,
-			val children: MutableList<Node> = mutableListOf(),
-			var parent: Node? = null,
-			var start: Int = 0,
-			var end: Int = 0
+			val indexInSiblings: Int,
+			val openStart: Int,
+			val openEnd: Int,
+			val childCounters: MutableMap<String, Int> = hashMapOf()
 		)
 
-		// Теперь атрибуты могут содержать любые символы, кроме '>'
 		val openRx = Regex("""<([A-Za-z_][\w:.\-]*)([^>]*?)>""")
 		val selfRx = Regex("""<([A-Za-z_][\w:.\-]*)([^>]*?)/>""")
 		val closeRx = Regex("""</([A-Za-z_][\w:.\-]*)\s*>""")
@@ -1044,70 +1107,11 @@ class XmlXsltValidatorApp : Application() {
 		fun attrsOf(tag: String) =
 			attrRx.findAll(tag).associate { it.groupValues[1] to it.groupValues[3] }
 
-		// «Технический» корень
-		val root = Node("ROOT", emptyMap())
-		var cur = root
-		var i = 0
-
-		// Строим дерево до позиции курсора
-		while (i < xml.length) {
-			val lt = xml.indexOf('<', i).takeIf { it >= 0 } ?: break
-			if (offset in i until lt) break
-			when {
-				selfRx.matchAt(xml, lt) != null -> {
-					val m = selfRx.matchAt(xml, lt)!!
-					val nod = Node(
-						m.groupValues[1],
-						attrsOf(m.value),
-						start = m.range.first,
-						end = m.range.last,
-						parent = cur
-					)
-					cur.children.add(nod)
-					i = m.range.last + 1
-				}
-
-				openRx.matchAt(xml, lt) != null -> {
-					val m = openRx.matchAt(xml, lt)!!
-					val nod = Node(
-						m.groupValues[1],
-						attrsOf(m.value),
-						start = m.range.first,
-						parent = cur
-					)
-					cur.children.add(nod)
-					cur = nod
-					i = m.range.last + 1
-				}
-
-				closeRx.matchAt(xml, lt) != null -> {
-					val m = closeRx.matchAt(xml, lt)!!
-					cur.end = m.range.last
-					cur = cur.parent ?: root
-					i = m.range.last + 1
-				}
-
-				else -> i = lt + 1
-			}
-		}
-
-		// Ищем путь до узла под курсором
-		val chain = mutableListOf<Node>()
-		fun findPath(n: Node, path: MutableList<Node>): Boolean {
-			if (offset !in n.start..(n.end.takeIf { it > 0 } ?: Int.MAX_VALUE)) return false
-			path.add(n)
-			for (c in n.children) if (findPath(c, path)) return true
-			return true
-		}
-		if (!findPath(root, chain) || chain.size <= 1) {
-			return XPathMeta("/", emptyList())
-		}
-
-		// Предикат по атрибуту, если курсор внутри @…
+		// Предикат по атрибуту, если курсор внутри головы тега
 		var attrPred = ""
 		run {
 			val ts = xml.lastIndexOf('<', offset).coerceAtLeast(0)
-			val te = xml.indexOf('>', ts).coerceAtLeast(ts)
+			val te = xml.indexOf('>', ts).let { if (it == -1) ts else it }
 			if (offset in ts..te) {
 				attrRx.findAll(xml.substring(ts, te + 1)).forEach { a ->
 					val s = ts + a.range.first
@@ -1116,11 +1120,91 @@ class XmlXsltValidatorApp : Application() {
 				}
 			}
 		}
-		val segs = chain.drop(1).map { n ->
-			val siblings = n.parent!!.children.filter { it.name == n.name }
-			val idx = siblings.indexOf(n) + 1
-			SegMeta(n.name, "[$idx]", n.attrs)
+
+		val stack = mutableListOf<Frame>()
+		val rootCounters = hashMapOf<String, Int>()
+
+		var i = 0
+		var pathAtOffset: List<Frame>? = null
+
+		fun nextIndexFor(parent: Frame?, name: String): Int {
+			val counters = parent?.childCounters ?: rootCounters
+			val n = (counters[name] ?: 0) + 1
+			counters[name] = n
+			return n
 		}
+
+		while (i < xml.length && pathAtOffset == null) {
+			val lt = xml.indexOf('<', i)
+			if (lt < 0) break
+
+			// offset в тексте между тегами — путь это текущий стек
+			if (offset in i until lt) {
+				pathAtOffset = stack.toList()
+				break
+			}
+
+			// ---- Самозакрывающийся тег ----
+			val mSelf = selfRx.matchAt(xml, lt)
+			if (mSelf != null) {
+				val name = mSelf.groupValues[1]
+				val attrs = attrsOf(mSelf.value)
+				val idx = nextIndexFor(stack.lastOrNull(), name)
+				val leaf = Frame(name, attrs, idx, mSelf.range.first, mSelf.range.last, hashMapOf())
+				if (offset in mSelf.range) {
+					pathAtOffset = stack + leaf
+					break
+				}
+				i = mSelf.range.last + 1
+				continue
+			}
+
+			// ---- Открывающий тег ----
+			val mOpen = openRx.matchAt(xml, lt)
+			if (mOpen != null) {
+				val name = mOpen.groupValues[1]
+				val attrs = attrsOf(mOpen.value)
+				val idx = nextIndexFor(stack.lastOrNull(), name)
+				val fr = Frame(name, attrs, idx, mOpen.range.first, mOpen.range.last)
+				stack.add(fr)
+				if (offset in mOpen.range) {
+					pathAtOffset = stack.toList()
+					break
+				}
+				i = mOpen.range.last + 1
+				continue
+			}
+
+			// ---- Закрывающий тег ----
+			val mClose = closeRx.matchAt(xml, lt)
+			if (mClose != null) {
+				if (offset in mClose.range && stack.isNotEmpty()) {
+					pathAtOffset = stack.toList()
+					break
+				}
+				val closeName = mClose.groupValues[1]
+				// Поп до совпадающего имени (защита от «битого» XML)
+				for (k in stack.indices.reversed()) {
+					if (stack[k].name == closeName) {
+						while (stack.size > k) stack.removeAt(stack.lastIndex)
+						break
+					}
+				}
+				i = mClose.range.last + 1
+				continue
+			}
+
+			// Не тег — просто сдвигаемся после '<'
+			i = lt + 1
+		}
+
+		// Если ничего не зафиксировали, но есть открытый контекст — используем его
+		if (pathAtOffset == null && stack.isNotEmpty()) {
+			pathAtOffset = stack.toList()
+		}
+
+		val path = pathAtOffset ?: return XPathMeta("/", emptyList())
+		val segs = path.map { SegMeta(it.name, "[${it.indexInSiblings}]", it.attrs) }
 
 		val xpath = buildString {
 			segs.forEach { append('/').append(it.name).append(it.predicate) }
