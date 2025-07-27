@@ -150,3 +150,14 @@ compileKotlin {
 		languageVersion = "1.9"
 	}
 }
+
+tasks.named("processResources", Copy) {
+	doFirst {
+		println "Ищем все xml‑highlighting.css в ресурсах:"
+		// source — это FileTree всех ресурсов, которые будут скопированы
+		source.files.findAll { it.name == "xml‑highlighting.css" }
+				.each { println "  → " + it.absolutePath }
+	}
+	// после отладки можно вернуть стратегию обратно на EXCLUDE или WARN
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}

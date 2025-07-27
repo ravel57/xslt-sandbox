@@ -22,14 +22,11 @@ import org.fxmisc.flowless.VirtualizedScrollPane
 import org.fxmisc.richtext.CodeArea
 import org.fxmisc.richtext.LineNumberFactory
 import org.fxmisc.richtext.model.StyleSpansBuilder
-import org.fxmisc.richtext.model.TwoDimensional.Bias
 import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
 import java.io.StringReader
 import java.io.StringWriter
-import java.nio.charset.Charset
-import java.nio.charset.StandardCharsets
 import java.nio.file.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.regex.Pattern
@@ -275,12 +272,6 @@ class XmlXsltValidatorApp : Application() {
 
 	/**
 	 * Создаёт кнопку «Open …».
-	 *
-	 * @param caption        текст на кнопке
-	 * @param extDescription подпись фильтра (например "XML Files (*.xml)")
-	 * @param targetArea     CodeArea, в который нужно загрузить текст
-	 * @param exts           vararg расширений ("*.xml", "*.xsl" …)
-	 * @param pathSetter     лямбда, куда сохраняем выбранный Path
 	 */
 	private fun createChooser(
 		title: String,
@@ -315,7 +306,7 @@ class XmlXsltValidatorApp : Application() {
 				StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE
 			)
 		} catch (ex: Exception) {
-			println("Не удалось сохранить config.json → ${ex.message}")
+			System.err.println("Не удалось сохранить config.json -> ${ex.message}")
 		}
 	}
 
@@ -445,7 +436,7 @@ class XmlXsltValidatorApp : Application() {
 			"net.sf.saxon.TransformerFactoryImpl",
 			XmlXsltValidatorApp::class.java.classLoader
 		).apply {
-			setErrorListener(object : ErrorListener {
+			errorListener = object : ErrorListener {
 				override fun warning(ex: TransformerException) = report("WARNING in XSLT", ex)
 				override fun error(ex: TransformerException) = report("ERROR   in XSLT", ex)
 				override fun fatalError(ex: TransformerException) = report("FATAL   in XSLT", ex)
@@ -457,7 +448,7 @@ class XmlXsltValidatorApp : Application() {
 						status.append("$level: ${ex.message}\n")
 					}
 				}
-			})
+			}
 		}
 
 		val templates = try {
@@ -490,31 +481,6 @@ class XmlXsltValidatorApp : Application() {
 			s.nanCountLabel.isVisible = nanCount > 0
 			showStatus(owner, status.toString())
 		}
-	}
-
-
-	private fun readTextRespectingXmlDecl(path: Path): String {
-		val bytes = Files.readAllBytes(path)
-		fun bomCharset(): Pair<Int, Charset>? = when {
-			bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()
-			-> 3 to StandardCharsets.UTF_8
-
-			bytes.size >= 2 && bytes[0] == 0xFE.toByte() && bytes[1] == 0xFF.toByte()
-			-> 2 to StandardCharsets.UTF_16BE
-
-			bytes.size >= 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xFE.toByte()
-			-> 2 to StandardCharsets.UTF_16LE
-
-			else -> null
-		}
-		bomCharset()?.let { (skip, cs) -> return String(bytes, skip, bytes.size - skip, cs) }
-		val probe = String(bytes, 0, minOf(bytes.size, 256), Charsets.ISO_8859_1)
-		val enc = Regex("""encoding\s*=\s*['"]([\w\-\d]+)['"]""", RegexOption.IGNORE_CASE)
-			.find(probe)
-			?.groupValues
-			?.get(1)
-			?.let { runCatching { Charset.forName(it) }.getOrNull() }
-		return String(bytes, enc ?: StandardCharsets.UTF_8)
 	}
 
 
@@ -663,7 +629,7 @@ class XmlXsltValidatorApp : Application() {
 
 		val anchor = if (forward) selEnd else (selStart - 1).coerceAtLeast(0)
 
-		var idx = if (forward) {
+		val idx = if (forward) {
 			// Следующее совпадение со стартом >= anchor, иначе — первое (wrap)
 			matches.indexOfFirst { it.first >= anchor }.let { if (it == -1) 0 else it }
 		} else {
@@ -771,7 +737,7 @@ class XmlXsltValidatorApp : Application() {
 			val cb = ChoiceBox<String>()
 			val opts = mutableListOf<String>()
 			if (seg.predicate.isNotEmpty()) opts.add("by index ${seg.predicate}")
-			opts.add("без предиката")
+			opts.add("no predicate")
 			seg.attrs.forEach { (k, v) -> opts.add("@$k='$v'") }
 			cb.items.addAll(opts); cb.value = opts[0]
 			return HBox(6.0, lbl, cb)
@@ -912,13 +878,6 @@ class XmlXsltValidatorApp : Application() {
 		area.moveTo(start)
 		area.selectRange(start, end)
 		area.followCaretBothAxes()
-	}
-
-
-	private fun findAllMatches(text: String, query: String): List<IntRange> {
-		if (query.isBlank()) return emptyList()
-		val rx = Regex(Pattern.quote(query), RegexOption.IGNORE_CASE)
-		return rx.findAll(text).map { it.range }.toList()
 	}
 
 
