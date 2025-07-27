@@ -1,13 +1,16 @@
 package ru.ravel.xsltsandbox
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import javafx.animation.AnimationTimer
 import javafx.application.Application
 import javafx.application.Platform
+import javafx.concurrent.Task
 import javafx.geometry.Insets
 import javafx.geometry.Orientation
 import javafx.geometry.Pos
 import javafx.scene.Scene
 import javafx.scene.control.*
+import javafx.scene.input.Clipboard
 import javafx.scene.input.KeyCode
 import javafx.scene.input.KeyEvent
 import javafx.scene.layout.BorderPane
@@ -60,6 +63,9 @@ class XmlXsltValidatorApp : Application() {
 	private val configPath: Path = Paths.get(System.getenv("APPDATA"), "xslt-sandbox", "config.json")
 	private lateinit var config: AppConfig
 	private var disableSyntaxHighlighting = false
+
+	@Volatile
+	private var suspendHighlighting = 0
 
 
 	override fun init() {
@@ -145,20 +151,16 @@ class XmlXsltValidatorApp : Application() {
 
 		val openXmlBtn = Button("Open XML…").apply {
 			setOnAction {
-				val file = createChooser(
-					"Open XML…", currentSession.xmlPath,
-					"XML Files (*.xml)", "*.xml"
-				).showOpenDialog(currentStage) ?: return@setOnAction
-				loadFileIntoArea(currentSession, file.toPath(), currentSession.xmlArea) { currentSession.xmlPath = it }
+				val file = createChooser("Open XML…", currentSession.xmlPath, "XML Files (*.xml)", "*.xml")
+					.showOpenDialog(currentStage) ?: return@setOnAction
+				loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xmlArea) { currentSession.xmlPath = it }
 			}
 		}
 		val openXsltBtn = Button("Open XSLT…").apply {
 			setOnAction {
-				val file = createChooser(
-					"Open XSLT…", currentSession.xsltPath,
-					"XSLT Files (*.xsl, *.xslt)", "*.xsl", "*.xslt"
-				).showOpenDialog(currentStage) ?: return@setOnAction
-				loadFileIntoArea(currentSession, file.toPath(), currentSession.xsltArea) { path ->
+				val file = createChooser("Open XSLT…", currentSession.xsltPath, "XSLT Files (*.xsl, *.xslt)", "*.xsl", "*.xslt")
+					.showOpenDialog(currentStage) ?: return@setOnAction
+				loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xsltArea) { path ->
 					currentSession.xsltPath = path
 					currentSession.updateTabTitle()
 				}
@@ -243,6 +245,79 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
+	private fun pasteFromClipboardWithProgress(area: CodeArea) {
+		val clip = Clipboard.getSystemClipboard()
+		val text = clip.string ?: return
+
+		// Небольшие вставки — мгновенно, без диалога
+		if (text.length < 200_000) {
+			suspendHighlighting++
+			try {
+				area.replaceSelection(text)
+			} finally {
+				suspendHighlighting--
+				highlightAllMatches(area, currentQuery, area === currentSession.resultArea)
+			}
+			return
+		}
+
+		// Крупная вставка — по блокам, с прогрессом
+		val total = text.length
+		val chunk = 64 * 1024
+
+		val bar = ProgressBar(0.0).apply { prefWidth = 380.0 }
+		val msg = Label("Pasting… 0%")
+		val cancelBtn = Button("Cancel")
+		val box = VBox(10.0, msg, bar, HBox(10.0, cancelBtn)).apply {
+			padding = Insets(14.0); alignment = Pos.CENTER_LEFT
+		}
+		val dlg = Stage().apply {
+			initOwner(currentStage); initModality(Modality.WINDOW_MODAL)
+			title = "Pasting large text"; scene = Scene(box)
+		}
+
+		val startSel = area.selection.start
+		val endSel = area.selection.end
+		suspendHighlighting++
+
+		var i = 0
+		// Сначала очищаем выделение и ставим каретку в начало вставки
+		area.replaceText(startSel, endSel, "")
+		area.moveTo(startSel)
+
+		val timer = object : AnimationTimer() {
+			override fun handle(now: Long) {
+				val next = (i + chunk).coerceAtMost(total)
+				val part = text.substring(i, next)
+				area.insertText(area.caretPosition, part)
+				i = next
+
+				val p = i.toDouble() / total
+				bar.progress = p
+				msg.text = "Pasting… ${(p * 100).toInt()}%"
+
+				if (i >= total) {
+					stop()
+					dlg.close()
+					suspendHighlighting--
+					highlightAllMatches(area, currentQuery, area === currentSession.resultArea)
+					area.requestFollowCaret()
+				}
+			}
+		}
+
+		cancelBtn.setOnAction {
+			timer.stop()
+			dlg.close()
+			suspendHighlighting--
+			highlightAllMatches(area, currentQuery, area === currentSession.resultArea)
+		}
+
+		dlg.show()
+		timer.start()
+	}
+
+
 	private fun DocSession.currentAreaOr(xml: Boolean): CodeArea {
 		return currentArea ?: if (xml) this.xmlArea else this.xsltArea
 	}
@@ -250,14 +325,33 @@ class XmlXsltValidatorApp : Application() {
 	/**
 	 *  Creates a CodeArea with line numbers and XML syntax highlighting
 	 */
-	private fun createHighlightingCodeArea(highlightNaN: Boolean): CodeArea =
-		CodeArea().apply {
+	private fun createHighlightingCodeArea(highlightNaN: Boolean): CodeArea {
+		return CodeArea().apply codeArea@{
 			paragraphGraphicFactory = LineNumberFactory.get(this)
 			textProperty().addListener { _, _, _ ->
-				highlightAllMatches(this, currentQuery, highlightNaN)
+				if (suspendHighlighting == 0) {
+					highlightAllMatches(this, currentQuery, highlightNaN)
+				}
 			}
+			val self = this
+			addEventFilter(KeyEvent.KEY_PRESSED) { e ->
+				val ctrlV = e.code == KeyCode.V && e.isControlDown
+				val shiftIns = e.code == KeyCode.INSERT && e.isShiftDown
+				if ((ctrlV || shiftIns) && isFocused) {
+					e.consume()
+					pasteFromClipboardWithProgress(this) // ← теперь this — CodeArea!
+				}
+			}
+
+			contextMenu = ContextMenu(
+				MenuItem("Paste").apply {
+					setOnAction { pasteFromClipboardWithProgress(self) }
+				}
+			)
+
 			highlightAllMatches(this, currentQuery, highlightNaN)
 		}
+	}
 
 	/**
 	 * Wraps a CodeArea in a VBox with a label and VirtualizedScrollPane
@@ -325,6 +419,49 @@ class XmlXsltValidatorApp : Application() {
 		if (!watchDirs.contains(dir)) {
 			dir.register(watchService, StandardWatchEventKinds.ENTRY_MODIFY)
 			watchDirs.add(dir)
+		}
+	}
+
+
+	private fun loadFileIntoAreaAsync(
+		session: DocSession,
+		path: Path,
+		area: CodeArea,
+		setPath: (Path) -> Unit
+	) {
+		val total = runCatching { Files.size(path).coerceAtLeast(1) }.getOrDefault(1L).toDouble()
+
+		val task = object : Task<String>() {
+			override fun call(): String {
+				updateMessage("Reading ${path.fileName}…")
+				val sb = StringBuilder()
+				Files.newBufferedReader(path, Charsets.UTF_8).use { r ->
+					val buf = CharArray(64 * 1024)
+					var read = r.read(buf)
+					var acc = 0L
+					while (read >= 0 && !isCancelled) {
+						sb.appendRange(buf, 0, read)
+						acc += read
+						updateMessage("Loaded ${acc / 1024} KB")
+						updateProgress(acc.toDouble(), total)
+						read = r.read(buf)
+					}
+				}
+				return sb.toString()
+			}
+		}
+
+		runWithProgress(currentStage, "Opening ${path.fileName}", task) { text ->
+			text ?: return@runWithProgress
+			suspendHighlighting++
+			try {
+				area.replaceText(text)
+			} finally {
+				suspendHighlighting--
+				highlightAllMatches(area, currentQuery, area === session.resultArea)
+			}
+			setPath(path)
+			registerWatch(path, session, area)
 		}
 	}
 
@@ -778,7 +915,7 @@ class XmlXsltValidatorApp : Application() {
 		val dlg = Stage()
 		searchDialog = dlg
 		okBtn.setOnAction {
-			val clip = javafx.scene.input.Clipboard.getSystemClipboard()
+			val clip = Clipboard.getSystemClipboard()
 			clip.setContent(javafx.scene.input.ClipboardContent().apply {
 				putString(resultField.text)
 			})
@@ -997,6 +1134,32 @@ class XmlXsltValidatorApp : Application() {
 		val name = xsltPath?.fileName?.toString() ?: return
 		tab.text = name
 		tab.tooltip = Tooltip(xsltPath.toString())
+	}
+
+
+	private fun <T> runWithProgress(
+		owner: Stage,
+		title: String,
+		task: Task<T>,
+		onDone: (T?) -> Unit = {}
+	) {
+		val bar = ProgressBar().apply { prefWidth = 380.0 }
+		val msg = Label("Starting…")
+		bar.progressProperty().bind(task.progressProperty())
+		msg.textProperty().bind(task.messageProperty())
+		val cancelBtn = Button("Cancel").apply { setOnAction { task.cancel() } }
+		val box = VBox(10.0, msg, bar, HBox(10.0, cancelBtn)).apply {
+			padding = Insets(14.0); alignment = Pos.CENTER_LEFT
+		}
+		val dlg = Stage().apply {
+			initOwner(owner); initModality(Modality.WINDOW_MODAL)
+			this.title = title; scene = Scene(box)
+		}
+		task.setOnSucceeded { dlg.close(); onDone(task.value) }
+		task.setOnFailed { dlg.close(); showStatus(owner, "Operation failed:\n${task.exception?.message}") }
+		task.setOnCancelled { dlg.close() }
+		Thread(task, "progress-task").apply { isDaemon = true }.start()
+		dlg.show()
 	}
 
 

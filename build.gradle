@@ -14,7 +14,7 @@ plugins {
 }
 
 group = 'ru.ravel'
-version = '0.1.8'
+version = '0.1.9'
 
 repositories {
 	mavenCentral()
@@ -153,10 +153,10 @@ compileKotlin {
 
 tasks.named("processResources", Copy) {
 	doFirst {
-		println "Ищем все xml‑highlighting.css в ресурсах:"
+		println "Looking for xml‑highlighting.css in resources:"
 		// source — это FileTree всех ресурсов, которые будут скопированы
 		source.files.findAll { it.name == "xml‑highlighting.css" }
-				.each { println "  → " + it.absolutePath }
+				.each { println "  -> " + it.absolutePath }
 	}
 	// после отладки можно вернуть стратегию обратно на EXCLUDE или WARN
 	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
