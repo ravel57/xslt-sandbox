@@ -209,9 +209,15 @@ class XmlXsltValidatorApp : Application() {
 		xsltOverlay.heightProperty().bind(xsltStack.heightProperty())
 		StackPane.setAlignment(xsltOverlay, Pos.TOP_LEFT)
 		StackPane.setAlignment(xsltScroll, Pos.TOP_LEFT)
-
 		VBox.setVgrow(xsltStack, Priority.ALWAYS)
-		val xsltBox = VBox(4.0, Label("XSLT"), xsltStack).apply {
+		val xsltStatusLabel = Label().apply {
+			isVisible = false
+			padding = Insets(0.0, 0.0, 0.0, 8.0)
+		}
+		val xsltHeader = HBox(4.0, Label("XSLT"), xsltStatusLabel).apply {
+			alignment = Pos.CENTER_LEFT
+		}
+		val xsltBox = VBox(4.0, xsltHeader, xsltStack).apply {
 			padding = Insets(8.0)
 			minWidth = 0.0
 		}
@@ -271,11 +277,12 @@ class XmlXsltValidatorApp : Application() {
 				}
 			}
 		}
-
-		val session = DocSession(tab, xsltArea, xmlArea, resultArea, nanCountLabel)
-		session.xsltOverlay = xsltOverlay
-		hookOverlayRedraw(session)
+		val session = DocSession(tab, xsltArea, xmlArea, resultArea, nanCountLabel).also {
+			it.xsltOverlay = xsltOverlay
+			it.xsltStatusLabel = xsltStatusLabel
+		}
 		sessions[tab] = session
+		hookOverlayRedraw(session)
 		return session
 	}
 
@@ -644,19 +651,38 @@ class XmlXsltValidatorApp : Application() {
 		val templates = try {
 			tfFactory.newTemplates(StreamSource(StringReader(s.xsltArea.text))).also {
 				status.append("XSLT compiled successfully.\n")
-				s.xsltWarningRanges = saxonWarnAcc
 				s.xsltSyntaxErrorRanges = saxonErrAcc + saxonFatalAcc
 				highlightAllMatches(s.xsltArea, currentQuery, false)
 				appendBadSelectWarnings(s, status)
-				Platform.runLater { redrawXsltOverlay(s) }
+				saxonWarnAcc.addAll(s.xsltBadSelectRanges)
+				s.xsltWarningRanges = saxonWarnAcc
+				Platform.runLater {
+					val errs = s.xsltSyntaxErrorRanges.size
+					val warns = s.xsltWarningRanges.size
+					s.xsltStatusLabel?.text = "Errors: $errs, Warnings: $warns"
+					s.xsltStatusLabel?.isVisible = (errs + warns) > 0
+//					showStatus(owner, status.toString())
+				}
 			}
 		} catch (ex: TransformerException) {
-			s.xsltWarningRanges = saxonWarnAcc
 			s.xsltSyntaxErrorRanges = saxonErrAcc + saxonFatalAcc
+			s.xsltWarningRanges = saxonWarnAcc + s.xsltBadSelectRanges
 			highlightAllMatches(s.xsltArea, currentQuery, false)
 			appendBadSelectWarnings(s, status)
-			Platform.runLater { redrawXsltOverlay(s) }
-			showStatus(owner, status.toString())
+			Platform.runLater {
+				val errs = s.xsltSyntaxErrorRanges.size
+				val warns = s.xsltWarningRanges.size
+				s.xsltStatusLabel?.text = buildString {
+					if (errs > 0) append("Errors: $errs")
+					if (warns > 0) {
+						if (errs > 0) append(", ")
+						append("Warnings: $warns")
+					}
+				}
+				s.xsltStatusLabel?.isVisible = (errs + warns) > 0
+				redrawXsltOverlay(s)
+				showStatus(owner, status.toString())
+			}
 			return
 		}
 
@@ -679,6 +705,16 @@ class XmlXsltValidatorApp : Application() {
 			val nanCount = Regex("\\bNaN\\b").findAll(resultText).count()
 			s.nanCountLabel.text = "NaNs: $nanCount"
 			s.nanCountLabel.isVisible = nanCount > 0
+			val errs = s.xsltSyntaxErrorRanges.size
+			val warns = s.xsltWarningRanges.size
+			s.xsltStatusLabel?.text = buildString {
+				if (errs > 0) append("Errors: $errs")
+				if (warns > 0) {
+					if (errs > 0) append(", ")
+					append("Warnings: $warns")
+				}
+			}
+			s.xsltStatusLabel?.isVisible = (errs + warns) > 0
 			showStatus(owner, status.toString())
 			appendBadSelectWarnings(s, status)
 		}
@@ -1602,6 +1638,7 @@ class XmlXsltValidatorApp : Application() {
 		var xsltBadSelectRanges: List<IntRange> = emptyList(),
 		var xsltWarningRanges: List<IntRange> = emptyList(),
 		var xsltOverlay: Canvas? = null,
+		var xsltStatusLabel: Label? = null,
 	)
 
 
