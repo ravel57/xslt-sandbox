@@ -121,6 +121,12 @@ class XmlXsltValidatorApp : Application() {
 					event.consume()
 				}
 			}
+			addEventFilter(KeyEvent.KEY_PRESSED) { event ->
+				if (event.code == KeyCode.ENTER && event.isControlDown) {
+					doTransform(currentStage)
+					event.consume()
+				}
+			}
 			// если подключаете css подсветки
 			javaClass.classLoader.getResource("xml-highlighting.css")?.let {
 				stylesheets.add(it.toExternalForm())
@@ -661,7 +667,6 @@ class XmlXsltValidatorApp : Application() {
 					val warns = s.xsltWarningRanges.size
 					s.xsltStatusLabel?.text = "Errors: $errs, Warnings: $warns"
 					s.xsltStatusLabel?.isVisible = (errs + warns) > 0
-//					showStatus(owner, status.toString())
 				}
 			}
 		} catch (ex: TransformerException) {
@@ -780,21 +785,53 @@ class XmlXsltValidatorApp : Application() {
 	 * Ищет все xsl:value-of/@select, которые НЕ проходят умную проверку.
 	 */
 	private fun collectBadValueOfSelectsSmart(xsltText: String, opt: SmartOptions): List<ValueOfWarning> {
-		val re = Regex(
-			"""<(?:(?:xsl:)?value-of)\b[^>]*\bselect\s*=\s*(["'])(.*?)\1""",
+		val selectRe = Regex(
+			"""<(?:xsl:)?(?:value-of|copy-of|for-each|apply-templates|sort|attribute|param|with-param)\b[^>]*\bselect\s*=\s*(["'])(.*?)\1""",
 			setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
 		)
+		val testRe = Regex(
+			"""<(?:xsl:)?(?:if|when)\b[^>]*\btest\s*=\s*(["'])(.*?)\1""",
+			setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+		)
+		val useRe = Regex(
+			"""<(?:xsl:)?key\b[^>]*\buse\s*=\s*(["'])(.*?)\1""",
+			setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+		)
+		val valueRe = Regex(
+			"""<(?:xsl:)?number\b[^>]*\bvalue\s*=\s*(["'])(.*?)\1""",
+			setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+		)
+		val matchRe = Regex(
+			"""<(?:xsl:)?template\b[^>]*\bmatch\s*=\s*(["'])(.*?)\1""",
+			setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)
+		)
+		val useWhenRe = Regex(
+			"""\buse-when\s*=\s*(["'])(.*?)\1""",
+			RegexOption.IGNORE_CASE
+		)
+		val patterns = listOf(
+			selectRe,   // …/@select
+			testRe,     // …/@test
+			useRe,      // xsl:key/@use
+			valueRe,    // xsl:number/@value
+			matchRe,    // xsl:template/@match
+			useWhenRe   // …/@use-when (XSLT 3.0)
+		)
+		val matches = patterns
+			.asSequence()
+			.flatMap { it.findAll(xsltText) }
+			.sortedBy { it.range.first }
 		val out = mutableListOf<ValueOfWarning>()
-		for (m in re.findAll(xsltText)) {
-			val valGroup = m.groups[2] ?: continue
-			val raw = valGroup.value
+		for (m in matches) {
+			val exprGroup = m.groups[2] ?: continue
+			val raw = exprGroup.value
+			val startOffset = exprGroup.range.first
 			if (!isOkBySmartRule(raw, opt)) {
-				val start = valGroup.range.first
-				val before = xsltText.substring(0, start)
+				val before = xsltText.substring(0, startOffset)
 				val line = before.count { it == '\n' } + 1
 				val lastNl = before.lastIndexOf('\n')
-				val col = if (lastNl >= 0) (start - lastNl) else (start + 1)
-				out += ValueOfWarning(valGroup.range, line, col, raw)
+				val col = if (lastNl >= 0) startOffset - lastNl else startOffset + 1
+				out.add(ValueOfWarning(exprGroup.range, line, col, raw))
 			}
 		}
 		return out
@@ -987,7 +1024,8 @@ class XmlXsltValidatorApp : Application() {
 
 
 	/**
-	 * Shows a modal dialog with validation/transformation status
+	 * Shows a modal dialog with validation/transformation status,
+	 * и позволяет закрыть его по нажатию ESC.
 	 */
 	private fun showStatus(owner: Stage, text: String) {
 		val dialog = Stage().apply {
@@ -1003,7 +1041,15 @@ class XmlXsltValidatorApp : Application() {
 			padding = Insets(10.0)
 			VBox.setVgrow(ta, Priority.ALWAYS)
 		}
-		dialog.scene = Scene(box, 500.0, 300.0)
+		val scene = Scene(box, 500.0, 300.0).apply {
+			setOnKeyPressed { ev ->
+				if (ev.code == KeyCode.ESCAPE) {
+					dialog.close()
+				}
+			}
+		}
+
+		dialog.scene = scene
 		dialog.show()
 	}
 
@@ -1366,7 +1412,11 @@ class XmlXsltValidatorApp : Application() {
 		).apply { padding = Insets(12.0) }
 
 		dlg.scene = Scene(root).also { sc ->
-			sc.setOnKeyPressed { if (it.code == KeyCode.ESCAPE) dlg.close() }
+			sc.setOnKeyPressed {
+				if (it.code == KeyCode.ESCAPE) {
+					dlg.close()
+				}
+			}
 		}
 		dlg.show()
 	}
