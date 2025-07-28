@@ -10,6 +10,9 @@ module ru.ravel.xsltsandbox {
 	requires Saxon.HE;
 	requires tagsoup;
 	requires reactfx;
+	requires org.kordamp.ikonli.javafx;
+	requires org.kordamp.ikonli.fontawesome5;
+	requires org.kordamp.ikonli.core;
 
 
 	opens ru.ravel.xsltsandbox to javafx.fxml, com.fasterxml.jackson.databind;

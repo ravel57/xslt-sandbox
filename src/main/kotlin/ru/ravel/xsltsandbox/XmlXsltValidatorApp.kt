@@ -26,6 +26,8 @@ import org.fxmisc.richtext.CodeArea
 import org.fxmisc.richtext.LineNumberFactory
 import org.fxmisc.richtext.model.StyleSpansBuilder
 import org.fxmisc.richtext.model.TwoDimensional
+import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid
+import org.kordamp.ikonli.javafx.FontIcon
 import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
@@ -143,19 +145,26 @@ class XmlXsltValidatorApp : Application() {
 
 
 	private fun buildToolBar(): HBox {
-		val validateBtn = Button("Validate & Transform").apply {
+		val validateBtn = Button().apply {
+			graphic = FontIcon(FontAwesomeSolid.CHECK_CIRCLE)
+			tooltip = Tooltip("Validate & Transform")
 			setOnAction { doTransform(currentStage) }
 		}
-		val searchBtn = Button("Search").apply {
+		val searchBtn = Button().apply {
+			graphic = FontIcon(FontAwesomeSolid.SEARCH)
+			tooltip = Tooltip("Search")
 			setOnAction { showSearchWindow(currentStage, currentSession.currentAreaOr(xml = true)) }
 		}
 
-		val xpathBtn = Button("XPath…").apply {
-			setOnAction { openXPathEditor(currentStage) }
-		}
-
-		val executeXpathBtn = Button("Execute XPath…").apply {
-			setOnAction { executeXpath(currentStage) }
+		val xpathMenu = MenuButton("XPath…").apply {
+			items.addAll(
+				MenuItem("Edit XPath…").apply {
+					setOnAction { openXPathEditor(currentStage) }
+				},
+				MenuItem("Execute XPath…").apply {
+					setOnAction { executeXpath(currentStage) }
+				}
+			)
 		}
 
 		val openXmlBtn = Button("Open XML…").apply {
@@ -175,6 +184,8 @@ class XmlXsltValidatorApp : Application() {
 				}
 			}
 		}
+		HBox.setMargin(openXsltBtn, Insets(0.0, 0.0, 0.0, 16.0))
+
 		val saveXsltBtn = Button("Save XSLT…").apply {
 			setOnAction { saveCurrentXslt() }
 		}
@@ -190,11 +201,16 @@ class XmlXsltValidatorApp : Application() {
 				}
 			}
 		}
+		HBox.setMargin(disableHighlightCheck, Insets(0.0, 0.0, 0.0, 16.0))
 
 		return HBox(
 			8.0,
-			validateBtn, searchBtn, xpathBtn, executeXpathBtn,
-			openXsltBtn, saveXsltBtn, openXmlBtn,
+			validateBtn,
+			searchBtn,
+			xpathMenu,
+			openXsltBtn,
+			saveXsltBtn,
+			openXmlBtn,
 			disableHighlightCheck
 		).apply {
 			alignment = Pos.CENTER_LEFT

@@ -30,6 +30,10 @@ dependencies {
 	implementation "com.fasterxml.jackson.module:jackson-module-kotlin:2.17.0"
 	implementation "org.ccil.cowan.tagsoup:tagsoup:1.2.1"
 
+	implementation "org.kordamp.ikonli:ikonli-javafx:12.3.0"
+	implementation "org.kordamp.ikonli:ikonli-fontawesome5-pack:12.3.0"
+	implementation "org.kordamp.ikonli:ikonli-materialdesign2-pack:12.3.0"
+
 	testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
 	testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.0'
 }
