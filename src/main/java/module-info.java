@@ -16,5 +16,6 @@ module ru.ravel.xsltsandbox {
 
 
 	opens ru.ravel.xsltsandbox to javafx.fxml, com.fasterxml.jackson.databind;
+	opens ru.ravel.xsltsandbox.models to com.fasterxml.jackson.databind, com.fasterxml.jackson.module.kotlin, kotlin.reflect;
 	exports ru.ravel.xsltsandbox;
 }

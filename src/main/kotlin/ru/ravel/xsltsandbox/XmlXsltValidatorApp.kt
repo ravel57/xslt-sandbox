@@ -8,6 +8,7 @@ import javafx.concurrent.Task
 import javafx.geometry.Insets
 import javafx.geometry.Orientation
 import javafx.geometry.Pos
+import javafx.scene.Node
 import javafx.scene.Scene
 import javafx.scene.canvas.Canvas
 import javafx.scene.canvas.GraphicsContext
@@ -31,10 +32,13 @@ import org.kordamp.ikonli.javafx.FontIcon
 import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
+import ru.ravel.xsltsandbox.models.*
+import ru.ravel.xsltsandbox.utils.XmlUtil
 import java.io.StringReader
 import java.io.StringWriter
 import java.nio.file.*
 import java.util.concurrent.ConcurrentHashMap
+import java.util.function.IntFunction
 import java.util.regex.Pattern
 import javax.xml.parsers.SAXParserFactory
 import javax.xml.transform.ErrorListener
@@ -43,7 +47,7 @@ import javax.xml.transform.TransformerFactory
 import javax.xml.transform.sax.SAXSource
 import javax.xml.transform.stream.StreamResult
 import javax.xml.transform.stream.StreamSource
-
+import org.fxmisc.richtext.model.TwoDimensional.Bias.Forward
 
 class XmlXsltValidatorApp : Application() {
 
@@ -67,9 +71,13 @@ class XmlXsltValidatorApp : Application() {
 	private val configPath: Path = Paths.get(System.getenv("APPDATA"), "xslt-sandbox", "config.json")
 	private lateinit var config: AppConfig
 	private var disableSyntaxHighlighting = false
+	private val foldedParagraphs = mutableSetOf<Int>()
 
 	@Volatile
 	private var suspendHighlighting = 0
+
+	@Volatile
+	private var watcherRunning = true
 
 
 	override fun init() {
@@ -82,6 +90,7 @@ class XmlXsltValidatorApp : Application() {
 	override fun stop() {
 		try {
 			saveConfig()
+			watcherRunning = false
 			watchService.close()
 		} catch (e: Exception) {
 			System.err.println(e.localizedMessage)
@@ -141,6 +150,7 @@ class XmlXsltValidatorApp : Application() {
 
 		// восстановим последнюю сессию из config (если нужно)
 		restorePreviouslyOpenedFiles(first)
+		startWatchThread()
 	}
 
 
@@ -309,6 +319,48 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
+	private fun startWatchThread() {
+		Thread({
+			try {
+				while (watcherRunning) {
+					val key = try {
+						watchService.take()
+					} catch (_: ClosedWatchServiceException) {
+						break // выходим из цикла
+					}
+					val dir = key.watchable() as Path
+					for (event in key.pollEvents()) {
+						val ev = event as WatchEvent<Path>
+						val changed = dir.resolve(ev.context())
+						val entry = watchMap[changed] ?: continue
+						val (session, area) = entry
+
+						Platform.runLater {
+							try {
+								val file = changed.toFile()
+								val text = XmlUtil.readXmlSafe(file)
+								session.xsltEncoding = XmlUtil.getEncoding(file.readBytes())
+								suspendHighlighting++
+								try {
+									area.replaceText(text)
+								} finally {
+									suspendHighlighting--
+									highlightAllMatches(area, currentQuery, area === session.resultArea)
+								}
+							} catch (ex: Exception) {
+								showStatus(currentStage, "Не удалось обновить файл:\n$changed\n${ex.message}")
+							}
+						}
+					}
+					key.reset()
+				}
+			} catch (ex: Exception) {
+				if (watcherRunning) ex.printStackTrace()
+			}
+		}, "watch-thread").apply { isDaemon = true }.start()
+	}
+
+
 	private fun pasteFromClipboardWithProgress(area: CodeArea) {
 		val clip = Clipboard.getSystemClipboard()
 		val text = clip.string ?: return
@@ -391,11 +443,15 @@ class XmlXsltValidatorApp : Application() {
 	 */
 	private fun createHighlightingCodeArea(highlightNaN: Boolean): CodeArea {
 		return CodeArea().apply codeArea@{
-			paragraphGraphicFactory = LineNumberFactory.get(this)
+			// стандартная нумерация строк с кнопкой сворачивания
+			installFolding(this)
 			textProperty().addListener { _, _, _ ->
 				if (suspendHighlighting == 0) {
 					highlightAllMatches(this, currentQuery, highlightNaN)
 				}
+			}
+			caretPositionProperty().addListener { _, _, newPos ->
+				highlightTagPair(this, newPos.toInt())
 			}
 			val self = this
 			addEventFilter(KeyEvent.KEY_PRESSED) { e ->
@@ -478,15 +534,15 @@ class XmlXsltValidatorApp : Application() {
 		area: CodeArea,
 		setPath: (Path) -> Unit
 	) {
-		area.replaceText(Files.readString(path, Charsets.UTF_8))
-		setPath(path)
-
-		val dir = path.parent
-		watchMap[path] = session to area
-		if (!watchDirs.contains(dir)) {
-			dir.register(watchService, StandardWatchEventKinds.ENTRY_MODIFY)
-			watchDirs.add(dir)
+		val file = path.toFile()
+		if (area == session.xsltArea) {
+			session.xsltEncoding = XmlUtil.getEncoding(file.readBytes())
+		} else if (area == session.xmlArea) {
+			session.xmlEncoding = XmlUtil.getEncoding(file.readBytes())
 		}
+		area.replaceText(XmlUtil.readXmlSafe(file))
+		setPath(path)
+		registerWatch(path, session, area)
 	}
 
 
@@ -496,23 +552,21 @@ class XmlXsltValidatorApp : Application() {
 		area: CodeArea,
 		setPath: (Path) -> Unit
 	) {
-		val total = runCatching { Files.size(path).coerceAtLeast(1) }.getOrDefault(1L).toDouble()
-
 		val task = object : Task<String>() {
 			override fun call(): String {
 				updateMessage("Reading ${path.fileName}…")
-				val sb = StringBuilder()
-				Files.newBufferedReader(path, Charsets.UTF_8).use { r ->
-					val buf = CharArray(64 * 1024)
-					var read = r.read(buf)
-					var acc = 0L
-					while (read >= 0 && !isCancelled) {
-						sb.appendRange(buf, 0, read)
-						acc += read
-						updateMessage("Loaded ${acc / 1024} KB")
-						updateProgress(acc.toDouble(), total)
-						read = r.read(buf)
-					}
+				val bytes = Files.readAllBytes(path)
+				val total = bytes.size.toDouble()
+				val chunk = 64 * 1024
+
+				val sb = StringBuilder(total.toInt())
+				var i = 0
+				while (i < bytes.size && !isCancelled) {
+					val next = (i + chunk).coerceAtMost(bytes.size)
+					sb.append(XmlUtil.readXmlSafe(bytes.copyOfRange(i, next)))
+					updateMessage("Loaded ${next / 1024} KB")
+					updateProgress(next.toDouble(), total)
+					i = next
 				}
 				return sb.toString()
 			}
@@ -568,27 +622,26 @@ class XmlXsltValidatorApp : Application() {
 
 
 	private fun saveCurrentXslt() {
-		val s = currentSession
-		val path: Path = s.xsltPath ?: run {
+		val path: Path = currentSession.xsltPath ?: run {
 			val file = createChooser(
 				"Save XSLT…",
-				s.xsltPath,
+				currentSession.xsltPath,
 				"XSLT Files (*.xsl, *.xslt)", "*.xsl", "*.xslt"
 			).showSaveDialog(currentStage) ?: return
 			file.toPath()
 		}
 		Files.createDirectories(path.parent)
-		Files.writeString(
-			path,
-			s.xsltArea.text,
-			StandardOpenOption.CREATE,
-			StandardOpenOption.TRUNCATE_EXISTING,
-			StandardOpenOption.WRITE
+
+		val charset = currentSession.xsltEncoding ?: Charsets.UTF_8
+		XmlUtil.writeXmlWithBom(
+			file = path.toFile(),
+			text = currentSession.xsltArea.text,
+			charset = charset
 		)
 		// обновляем путь в сессии и подписываемся на изменения файла
-		if (s.xsltPath != path) {
-			s.xsltPath = path
-			registerWatch(path, s, s.xsltArea)
+		if (currentSession.xsltPath != path) {
+			currentSession.xsltPath = path
+			registerWatch(path, currentSession, currentSession.xsltArea)
 		}
 		saveConfig()
 		showStatus(currentStage, "XSLT saved:\n$path")
@@ -917,9 +970,9 @@ class XmlXsltValidatorApp : Application() {
 		)
 		val bad = collectBadValueOfSelectsSmart(session.xsltArea.text, smart)
 		session.xsltBadSelectRanges = bad.map { it.range }
-		bad.forEach { w ->
+		bad.forEach {
 			status.append(
-				"WARNING in XSLT [line=${w.line},col=${w.col}]: xsl:value-of select='${w.raw}' не является абсолютным/якорным.\n"
+				"WARNING in XSLT [line=${it.line},col=${it.col}]: xsl:value-of select='${it.raw}' не является абсолютным/якорным.\n"
 			)
 		}
 		highlightAllMatches(session.xsltArea, currentQuery, false)
@@ -1490,6 +1543,130 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
+	private fun highlightTagPair(area: CodeArea, caretPos: Int) {
+		val text = area.text
+		val openTagRegex = Regex("<([A-Za-z_][\\w:.-]*)[^>]*?>")
+		val closeTagRegex = Regex("</([A-Za-z_][\\w:.-]*)\\s*>")
+
+		// найти тег под курсором
+		val before = text.lastIndexOf('<', caretPos).takeIf { it >= 0 } ?: return
+		val after = text.indexOf('>', before).takeIf { it >= 0 } ?: return
+		val fragment = text.substring(before, after + 1)
+
+		val ranges = mutableListOf<IntRange>()
+
+		val mOpen = openTagRegex.matchEntire(fragment)
+		val mClose = closeTagRegex.matchEntire(fragment)
+
+		if (mOpen != null) {
+			val tagName = mOpen.groupValues[1]
+			val regex = Regex("</$tagName\\s*>")
+			regex.find(text, after)?.let { match ->
+				ranges += (before..after)
+				ranges += match.range
+			}
+		} else if (mClose != null) {
+			val tagName = mClose.groupValues[1]
+			val regex = Regex("<$tagName\\b[^>]*?>")
+			regex.findAll(text, 0).lastOrNull { it.range.last < before }?.let { match ->
+				ranges += match.range
+				ranges += (before..after)
+			}
+		}
+
+		// пересобираем стили
+		val base = computeSyntaxHighlightingChars(text) // твоя функция
+		val extra = MutableList(text.length) { mutableListOf<String>() }
+
+		for (r in ranges) {
+			for (i in r) {
+				if (i in extra.indices) {
+					extra[i].add("tag-match-highlight")
+				}
+			}
+		}
+
+		val builder = StyleSpansBuilder<Collection<String>>()
+		var prev: List<String>? = null
+		var runStart = 0
+
+		for (i in text.indices) {
+			val merged = base[i] + extra[i]
+			if (merged != prev) {
+				if (prev != null) {
+					builder.add(prev, i - runStart)
+				}
+				prev = merged
+				runStart = i
+			}
+		}
+		if (prev != null) {
+			builder.add(prev, text.length - runStart)
+		}
+
+		area.setStyleSpans(0, builder.create())
+	}
+
+
+	private fun installFolding(area: CodeArea) {
+		val lineNoFactory = LineNumberFactory.get(area)
+
+		area.paragraphGraphicFactory = IntFunction { line ->
+			val lineNo = lineNoFactory.apply(line)
+
+			val paragraphText = if (line < area.paragraphs.size) area.getParagraph(line).text else ""
+			val openTag = Regex("^\\s*<([A-Za-z_][\\w:.-]*)[^>]*?>").find(paragraphText)
+			val canFold = openTag != null
+
+			// этот рядок — старт свёрнутого участка?
+			val isFoldedStart = foldedParagraphs.contains(line)
+
+			val marker: Node = if (canFold) {
+				Label(if (isFoldedStart) "+" else "–").apply {
+					// одинаковый внешний вид для + и –
+					styleClass.setAll("fold-glyph")
+					// клик по индикатору — сложить/разложить
+					setOnMouseClicked { toggleFold(area, line) }
+					// компактная ширина, чтобы оказаться в том же месте, что и «плюс»
+					prefWidth = 12.0
+					minWidth = 12.0
+					maxWidth = 12.0
+				}
+			} else {
+				Region().apply { prefWidth = 12.0; minWidth = 12.0; maxWidth = 12.0 }
+			}
+
+			// порядок: [индикатор] [номер строки]
+			HBox(4.0, marker, lineNo).apply { alignment = Pos.CENTER_LEFT }
+		}
+	}
+
+
+
+	private fun toggleFold(area: CodeArea, line: Int) {
+		val text = area.text
+		val startOffset = area.getAbsolutePosition(line, 0)
+
+		val openMatch = Regex("<([A-Za-z_][\\w:.-]*)[^>]*?>").find(text, startOffset) ?: return
+		val tagName = openMatch.groupValues[1]
+		val closeMatch = Regex("</$tagName\\s*>").find(text, openMatch.range.last) ?: return
+
+		val startPar = area.offsetToPosition(openMatch.range.first, Forward).major
+		val endPar = area.offsetToPosition(closeMatch.range.last, Forward).major
+
+		if (foldedParagraphs.contains(startPar)) {
+			area.unfoldParagraphs(startPar) // тут по API достаточно стартового параграфа
+			foldedParagraphs.remove(startPar)
+		} else {
+			area.foldParagraphs(startPar, endPar) // нужно передать start и end
+			foldedParagraphs.add(startPar)
+		}
+
+		// обновим гуттер, чтобы на этой строке «–» сменился на «+» и наоборот
+		installFolding(area)
+	}
+
+
 	/** Прокручивает и по вертикали (стандартно), и по горизонтали (вручную) к каретке. */
 	private fun CodeArea.followCaretBothAxes() {
 		// Вертикаль (и часть горизонтали) — стандартно
@@ -1676,68 +1853,6 @@ class XmlXsltValidatorApp : Application() {
 		task.setOnCancelled { dlg.close() }
 		Thread(task, "progress-task").apply { isDaemon = true }.start()
 		dlg.show()
-	}
-
-
-	data class SegMeta(
-		val name: String,          // имя элемента
-		val predicate: String,     // исходный индекс в виде "[n]"
-		val attrs: Map<String, String>  // найденные атрибуты
-	)
-
-
-	data class XPathMeta(
-		val xpath: String,         // итоговый путь
-		val segs: List<SegMeta>   // метаданные для GUI-редактора
-	)
-
-
-	private data class DocSession(
-		val tab: Tab,
-		var xsltArea: CodeArea,
-		val xmlArea: CodeArea,
-		val resultArea: CodeArea,
-		val nanCountLabel: Label,
-		var xmlPath: Path? = null,
-		var xsltPath: Path? = null,
-		var xsltSyntaxErrorRanges: List<IntRange> = emptyList(),
-		var xsltBadSelectRanges: List<IntRange> = emptyList(),
-		var xsltWarningRanges: List<IntRange> = emptyList(),
-		var xsltOverlay: Canvas? = null,
-		var xsltStatusLabel: Label? = null,
-	)
-
-
-	private data class SmartOptions(
-		val allowAttributeShortcut: Boolean = true, // @id — ок
-		val allowDot: Boolean = false,              // .  — относит. (по умолчанию ругаемся)
-		val allowDotDot: Boolean = false            // .. — относит. (по умолчанию ругаемся)
-	)
-
-	private data class ValueOfWarning(
-		val range: IntRange, // диапазон в XSLT тексте — для подчёркивания
-		val line: Int,       // 1-based
-		val col: Int,        // 1-based
-		val raw: String      // исходное значение @select
-	)
-
-
-	data class AppConfig(
-		val tabs: List<TabState> = emptyList(),
-		val activeIndex: Int = 0
-	)
-
-	data class TabState(
-		val xml: String? = null,
-		val xslt: String? = null
-	)
-
-
-	private enum class Sev {
-		WARNING,
-		ERROR,
-		FATAL,
-		;
 	}
 
 

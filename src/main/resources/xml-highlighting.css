@@ -42,3 +42,31 @@
     -fx-fill: #fff;
     -rtfx-background-color: #e53935;
 }
+
+.tag-match-highlight {
+    -rtfx-background-color: rgba(100, 149, 237, 0.3); /* голубая подсветка */
+}
+
+.fold-button {
+    -fx-font-size: 8px;
+    -fx-padding: 0;
+    -fx-background-color: transparent;
+}
+
+.fold-marker {
+    -fx-font-size: 10px;
+    -fx-alignment: center;
+    -fx-background-color: lightgray;
+    -fx-text-fill: black;
+    -fx-border-color: gray;
+    -fx-border-radius: 2;
+    -fx-background-radius: 2;
+}
+
+.fold-glyph {
+    -fx-font-size: 10px;
+    -fx-background-color: transparent;
+    -fx-text-fill: #1b8cef; /* как подсветка тегов */
+    -fx-alignment: center;
+    -fx-padding: 0;
+}
