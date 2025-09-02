@@ -15,5 +15,13 @@ data class Connective(
 
 	@field:JacksonXmlElementWrapper(useWrapping = false)
 	@field:JacksonXmlProperty(localName = "Quantifier")
-	val quantifiers: List<Quantifier>? = null
+	val quantifiers: List<Quantifier>? = null,
+
+	@field:JacksonXmlElementWrapper(useWrapping = false)
+	@field:JacksonXmlProperty(localName = "VariableDefinition")
+	val variableDefinitions: List<VariableDefinition>? = null,
+
+	@field:JacksonXmlElementWrapper(useWrapping = false)
+	@field:JacksonXmlProperty(localName = "Predicate")
+	val predicates: List<Predicate>? = null,
 )

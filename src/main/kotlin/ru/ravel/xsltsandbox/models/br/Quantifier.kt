@@ -12,5 +12,9 @@ data class Quantifier(
 
 	@field:JacksonXmlElementWrapper(useWrapping = false)
 	@field:JacksonXmlProperty(localName = "Predicate")
-	val predicates: List<Predicate>? = null
+	val predicates: List<Predicate>? = null,
+
+	@field:JacksonXmlElementWrapper(useWrapping = false)
+	@field:JacksonXmlProperty(localName = "Quantifier")
+	val quantifiers: List<Quantifier>? = null
 )

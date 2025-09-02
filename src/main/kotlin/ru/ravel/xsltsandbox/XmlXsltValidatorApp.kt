@@ -37,8 +37,7 @@ import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
 import ru.ravel.xsltsandbox.models.*
-import ru.ravel.xsltsandbox.models.br.BizRuleActivityDefinition
-import ru.ravel.xsltsandbox.models.br.Connective
+import ru.ravel.xsltsandbox.models.br.*
 import ru.ravel.xsltsandbox.utils.XmlUtil
 import java.io.StringReader
 import java.io.StringWriter
@@ -209,11 +208,28 @@ class XmlXsltValidatorApp : Application() {
 				val mapper = XmlMapper().registerKotlinModule()
 				val bizRule = mapper.readValue(file, BizRuleActivityDefinition::class.java)
 				val innerXml = StringEscapeUtils.unescapeXml(bizRule.xmlRule.value)
-				val br = mapper.readValue(innerXml, Connective::class.java)
 
-				currentSession.brRoot = br
-				currentSession.brTree?.root = toTreeItem(br)
+				val rootNode: Any = if (innerXml.trim().startsWith("<Quantifier")) {
+					mapper.readValue(innerXml, Quantifier::class.java)
+				} else {
+					mapper.readValue(innerXml, Connective::class.java)
+				}
+
+				when (rootNode) {
+					is Quantifier -> {
+						currentSession.brRootQuant = rootNode
+						currentSession.brRoot = null
+						currentSession.brTree?.root = toTreeItem(rootNode)
+					}
+
+					is Connective -> {
+						currentSession.brRoot = rootNode
+						currentSession.brRootQuant = null
+						currentSession.brTree?.root = toTreeItem(rootNode)
+					}
+				}
 				currentSession.brTree?.isShowRoot = true
+				expandAll(currentSession.brTree?.root ?: return@setOnAction)
 			}
 		}
 		val openStack = StackPane(openXsltBtn, openBrBtn).apply {
@@ -330,6 +346,35 @@ class XmlXsltValidatorApp : Application() {
 		}
 		val brTreeView = TreeView<String>().apply {
 			isShowRoot = true
+			// Ctrl+C
+			addEventFilter(KeyEvent.KEY_PRESSED) { e ->
+				if (e.code == KeyCode.C && e.isControlDown) {
+					val selected = selectionModel.selectedItem
+					if (selected != null) {
+						val clip = Clipboard.getSystemClipboard()
+						val content = javafx.scene.input.ClipboardContent()
+						content.putString(selected.value)
+						clip.setContent(content)
+					}
+					e.consume()
+				}
+			}
+
+			// Контекстное меню ПКМ
+			contextMenu = ContextMenu().apply {
+				val copyItem = MenuItem("Copy").apply {
+					setOnAction {
+						val selected = selectionModel.selectedItem
+						if (selected != null) {
+							val clip = Clipboard.getSystemClipboard()
+							val content = javafx.scene.input.ClipboardContent()
+							content.putString(selected.value)
+							clip.setContent(content)
+						}
+					}
+				}
+				items.add(copyItem)
+			}
 		}
 		val brHeader = Label("Business Rule")
 		val brBox = VBox(4.0, brHeader, brTreeView).apply {
@@ -756,88 +801,29 @@ class XmlXsltValidatorApp : Application() {
 
 		when (s.mode) {
 			TransformMode.BR -> {
-				val status = StringBuilder()
-				val xmlText = s.xmlArea.text.trim()
-				if (xmlText.isEmpty()) {
-					showStatus(owner, "XML is empty.")
-					return
-				}
-				val brRoot = s.brRoot ?: run {
-					showStatus(owner, "BR is not loaded. Use “Open BR…” first.")
-					return
-				}
-
-				val proc = Processor(false)
-				val doc = try {
-					buildDocForXPath(proc, xmlText)
-				} catch (e: Exception) {
-					showStatus(owner, "XML parsing failed:\n${e.message}")
-					return
-				}
-				val xpc = proc.newXPathCompiler().also { setDefaultNsFromDoc(it, doc) }
-
-				fun xpathToString(expr: String): String {
-					val valSeq = xpc.evaluate(expr, doc)
-					val it = valSeq.iterator()
-					return if (!it.hasNext()) "" else it.next().stringValue
-				}
-
-				fun kindOf(type: String?): String =
-					type?.substringAfterLast('.')?.lowercase() ?: ""
-
-				fun evalPredicate(p: ru.ravel.xsltsandbox.models.br.Predicate, vars: Map<String, String>): Boolean {
-					val varName = p.variable?.value ?: return false
-					val left = vars[varName] ?: ""
-					val right = p.constant?.value ?: ""
-					return left == right
-				}
-
-				fun evalQuantifier(q: ru.ravel.xsltsandbox.models.br.Quantifier): Boolean {
-					val vd = q.variableDefinition
-					val vars: Map<String, String> =
-						if (vd?.name != null && vd.xpath?.value != null) {
-							mapOf(vd.name to xpathToString(vd.xpath.value))
-						} else emptyMap()
-
-					val preds = q.predicates.orEmpty()
-					return preds.all { evalPredicate(it, vars) }
-				}
-
-				fun evalConnective(c: ru.ravel.xsltsandbox.models.br.Connective): Boolean {
-					val k = kindOf(c.type)
-					val childConns = c.connectives.orEmpty()
-					val childQuants = c.quantifiers.orEmpty()
-
-					fun evalChildrenAsAnd(): Boolean =
-						childConns.all { evalConnective(it) } && childQuants.all { evalQuantifier(it) }
-
-					fun evalChildrenAsOr(): Boolean =
-						(childConns.any { evalConnective(it) }) || (childQuants.any { evalQuantifier(it) })
-
-					return when (k) {
-						"and" -> evalChildrenAsAnd()
-						"or" -> evalChildrenAsOr()
-						"not" -> !evalChildrenAsAnd()
-						else -> evalChildrenAsAnd()
+				val xml = currentSession.xmlArea.text
+				val br = currentSession.brRoot ?: currentSession.brRootQuant
+				val result = when (br) {
+					is Connective -> {
+						evaluateBR(xml, br)
 					}
+
+					is Quantifier -> {
+						val proc = Processor(false)
+						val doc = buildDocForXPath(proc, xml)
+						val compiler = proc.newXPathCompiler()
+						setDefaultNsFromDoc(compiler, doc)
+						evalQuantifier(br, compiler, doc)
+					}
+
+					else -> false
 				}
-
-				val ok = try {
-					evalConnective(brRoot)
-				} catch (e: Exception) {
-					showStatus(owner, "BR evaluation error:\n${e.message}")
-					return
-				}
-
-				val resultText = "BR result: ${if (ok) "TRUE" else "FALSE"}"
-				status.appendLine(resultText)
-
 				Platform.runLater {
-					s.resultArea.replaceText(resultText)
+					s.resultArea.replaceText(result.toString())
 					highlightAllMatches(s.resultArea, currentQuery, true)
 					s.nanCountLabel.text = ""
 					s.nanCountLabel.isVisible = false
-					showStatus(owner, status.toString())
+					showStatus(owner, result.toString())
 				}
 			}
 
@@ -2037,20 +2023,157 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
-	private fun toTreeItem(connective: Connective): TreeItem<String> {
-//		val rootItem = TreeItem(connective.type.substringAfterLast("."))
-		val rootItem = TreeItem(connective.type.split(", ")[0].substringAfterLast("."))
-		connective.connectives?.forEach { rootItem.children.add(toTreeItem(it)) }
-
-		connective.quantifiers?.forEach { q ->
-			val qItem = TreeItem("The ${q.variableDefinition?.name}")
-			q.predicates?.forEach { p ->
-				p.variable?.value?.let { qItem.children.add(TreeItem(it)) }
-				p.constant?.value?.let { qItem.children.add(TreeItem(it)) }
-			}
-			rootItem.children.add(qItem)
+	// ───────────────── BR → TreeView ─────────────────
+	private fun toTreeItem(node: Any): TreeItem<String> = when (node) {
+		is Connective -> TreeItem(kindOf(node.type)).apply {
+			node.predicates?.forEach { children.add(toTreeItem(it)) }
+			node.quantifiers?.forEach { children.add(toTreeItem(it)) }
+			node.connectives?.forEach { children.add(toTreeItem(it)) }
 		}
-		return rootItem
+
+		is Quantifier -> TreeItem(kindOf(node.type)).apply {
+			node.variableDefinition?.let { children.add(toTreeItem(it)) }
+			node.predicates?.forEach { children.add(toTreeItem(it)) }
+			node.quantifiers?.forEach { children.add(toTreeItem(it)) }
+		}
+
+		is Predicate -> TreeItem(kindOf(node.type)).apply {
+			node.variable?.value?.let { children.add(TreeItem(it)) }
+			node.constant?.value?.let { children.add(TreeItem(it)) }
+		}
+
+		is VariableDefinition -> TreeItem(node.name).apply {
+			node.xpath?.value?.let { children.add(TreeItem(it)) }
+		}
+
+		else -> TreeItem(node.toString())
+	}
+
+
+	private fun expandAll(item: TreeItem<*>) {
+		item.isExpanded = true
+		item.children.forEach { expandAll(it) }
+	}
+
+
+	/** Predicate (в т.ч. True/False/TextEquality/TextInequality) */
+	private fun evaluateBR(xml: String, root: Connective): Boolean {
+		val proc = Processor(false)
+		val compiler = proc.newXPathCompiler()
+		val doc: XdmNode = proc.newDocumentBuilder().build(StreamSource(StringReader(xml)))
+		return evalConnective(root, compiler, doc)
+	}
+
+
+	private fun kindOf(type: String?): String =
+		type?.lowercase()?.split(", ")?.first()?.substringAfterLast(".") ?: ""
+
+
+	private fun xpathToValues(expr: String, compiler: XPathCompiler, doc: XdmNode): List<String> {
+		val selector = compiler.compile(expr).load()
+		selector.contextItem = doc
+		val result = selector.evaluate()
+		return result.map { it.stringValue }
+	}
+
+
+	private fun evalPredicate(
+		p: Predicate,
+		compiler: XPathCompiler,
+		doc: XdmNode,
+		values: Map<String, String>,
+	): Boolean {
+		return when (kindOf(p.type)) {
+			"true" -> true
+			"false" -> false
+			"textequality" -> {
+				val varName = p.variable?.value ?: return false
+				values[varName]?.trim() == (p.constant?.value ?: "").trim()
+			}
+
+			"textinequality" -> {
+				val varName = p.variable?.value ?: return false
+				values[varName]?.trim() != (p.constant?.value ?: "").trim()
+			}
+
+			else -> false
+		}
+	}
+
+
+	private fun evalQuantifier(
+		q: Quantifier,
+		compiler: XPathCompiler,
+		doc: XdmNode,
+	): Boolean {
+		val vd = q.variableDefinition ?: return false
+		val xpath = vd.xpath?.value ?: return false
+
+		val values: List<String> = xpathToValues(xpath, compiler, doc)
+		if (values.isEmpty()) return false
+
+		val preds = q.predicates.orEmpty()
+		val quants = q.quantifiers.orEmpty()
+
+		fun okFor(value: String): Boolean {
+			return preds.all { evalPredicate(it, compiler, doc, mapOf(vd.name to value)) }
+					&& quants.all { evalQuantifier(it, compiler, doc) }
+		}
+
+		return when (kindOf(q.type)) {
+			"some" -> values.any { okFor(it) }
+			"exists" -> values.any { okFor(it) }
+			"all" -> values.all { okFor(it) }
+			"forall" -> values.all { okFor(it) }
+			"the" -> values.any { okFor(it) }
+			else -> false
+		}
+	}
+
+
+	private fun evalConnective(
+		c: Connective,
+		compiler: XPathCompiler,
+		doc: XdmNode,
+	): Boolean {
+		val preds: List<Predicate> = c.predicates.orEmpty()
+		val quants: List<Quantifier> = c.quantifiers.orEmpty()
+		val conns: List<Connective> = c.connectives.orEmpty()
+
+		val vmap: Map<String, String> = preds
+			.mapNotNull { p ->
+				val varName = p.variable?.value
+				val constVal = p.constant?.value
+				when {
+					varName != null && constVal != null -> varName to constVal
+					varName != null -> varName to "" // если константы нет
+					else -> null
+				}
+			}
+			.toMap()
+
+		val predsOk = preds.all { evalPredicate(it, compiler, doc, vmap) }
+
+		if (!predsOk) return false
+
+		return when (kindOf(c.type)) {
+			"and" -> conns.all { evalConnective(it, compiler, doc) } &&
+					quants.all { evalQuantifier(it, compiler, doc) }
+
+			"or" -> conns.any { evalConnective(it, compiler, doc) } ||
+					quants.any { evalQuantifier(it, compiler, doc) }
+
+			"not" -> conns.none { evalConnective(it, compiler, doc) } &&
+					quants.none { evalQuantifier(it, compiler, doc) }
+
+			"some", "exists", "the" ->
+				quants.any { evalQuantifier(it, compiler, doc) }
+
+			"all", "forall" ->
+				quants.all { evalQuantifier(it, compiler, doc) }
+
+			else -> predsOk
+		}
 	}
 
 
