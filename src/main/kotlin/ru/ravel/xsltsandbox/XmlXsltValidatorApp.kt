@@ -1,6 +1,8 @@
 package ru.ravel.xsltsandbox
 
+import com.fasterxml.jackson.dataformat.xml.XmlMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import javafx.animation.AnimationTimer
 import javafx.application.Application
 import javafx.application.Platform
@@ -22,17 +24,21 @@ import javafx.stage.FileChooser
 import javafx.stage.Modality
 import javafx.stage.Stage
 import net.sf.saxon.s9api.*
+import org.apache.commons.text.StringEscapeUtils
 import org.fxmisc.flowless.VirtualizedScrollPane
 import org.fxmisc.richtext.CodeArea
 import org.fxmisc.richtext.LineNumberFactory
 import org.fxmisc.richtext.model.StyleSpansBuilder
 import org.fxmisc.richtext.model.TwoDimensional
+import org.fxmisc.richtext.model.TwoDimensional.Bias.Forward
 import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid
 import org.kordamp.ikonli.javafx.FontIcon
 import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
 import ru.ravel.xsltsandbox.models.*
+import ru.ravel.xsltsandbox.models.br.BizRuleActivityDefinition
+import ru.ravel.xsltsandbox.models.br.Connective
 import ru.ravel.xsltsandbox.utils.XmlUtil
 import java.io.StringReader
 import java.io.StringWriter
@@ -47,7 +53,7 @@ import javax.xml.transform.TransformerFactory
 import javax.xml.transform.sax.SAXSource
 import javax.xml.transform.stream.StreamResult
 import javax.xml.transform.stream.StreamSource
-import org.fxmisc.richtext.model.TwoDimensional.Bias.Forward
+
 
 class XmlXsltValidatorApp : Application() {
 
@@ -155,7 +161,7 @@ class XmlXsltValidatorApp : Application() {
 
 
 	private fun buildToolBar(): HBox {
-		val validateBtn = Button().apply {
+		val validateAntTransformBtn = Button().apply {
 			graphic = FontIcon(FontAwesomeSolid.CHECK_CIRCLE)
 			tooltip = Tooltip("Validate & Transform")
 			setOnAction { doTransform(currentStage) }
@@ -194,10 +200,77 @@ class XmlXsltValidatorApp : Application() {
 				}
 			}
 		}
+		val openBrBtn = Button("Open BR…").apply {
+			isVisible = false
+			isManaged = false
+			setOnAction {
+				val file = createChooser("Open BR…", currentSession.xsltPath, "XML Files (*.xml)", "*.xml")
+					.showOpenDialog(currentStage) ?: return@setOnAction
+				val mapper = XmlMapper().registerKotlinModule()
+				val bizRule = mapper.readValue(file, BizRuleActivityDefinition::class.java)
+				val innerXml = StringEscapeUtils.unescapeXml(bizRule.xmlRule.value)
+				val br = mapper.readValue(innerXml, Connective::class.java)
+
+				currentSession.brRoot = br
+				currentSession.brTree?.root = toTreeItem(br)
+				currentSession.brTree?.isShowRoot = true
+			}
+		}
+		val openStack = StackPane(openXsltBtn, openBrBtn).apply {
+			minWidth = Region.USE_PREF_SIZE
+			prefWidth = 100.0
+		}
 		HBox.setMargin(openXsltBtn, Insets(0.0, 0.0, 0.0, 16.0))
 
 		val saveXsltBtn = Button("Save XSLT…").apply {
 			setOnAction { saveCurrentXslt() }
+		}
+
+		val saveStack = StackPane(saveXsltBtn).apply {
+			minWidth = Region.USE_PREF_SIZE
+			prefWidth = 100.0
+		}
+
+		val xsltRadio = RadioButton("XSLT").apply {
+			isSelected = true
+		}
+		val brRadio = RadioButton("BR")
+		val modeGroup = ToggleGroup().apply {
+			xsltRadio.toggleGroup = this
+			brRadio.toggleGroup = this
+		}
+		modeGroup.selectedToggleProperty().addListener { _, _, new ->
+			when (new) {
+				xsltRadio -> {
+					currentSession.mode = TransformMode.XSLT
+					openXsltBtn.isVisible = true
+					openXsltBtn.isManaged = true
+					openBrBtn.isVisible = false
+					openBrBtn.isManaged = false
+					saveXsltBtn.isVisible = true
+					saveXsltBtn.isManaged = true
+
+					currentSession.xsltBox?.isVisible = true
+					currentSession.xsltBox?.isManaged = true
+					currentSession.brBox?.isVisible = false
+					currentSession.brBox?.isManaged = false
+				}
+
+				brRadio -> {
+					currentSession.mode = TransformMode.BR
+					openXsltBtn.isVisible = false
+					openXsltBtn.isManaged = false
+					openBrBtn.isVisible = true
+					openBrBtn.isManaged = true
+					saveXsltBtn.isVisible = false
+					saveXsltBtn.isManaged = false
+
+					currentSession.xsltBox?.isVisible = false
+					currentSession.xsltBox?.isManaged = false
+					currentSession.brBox?.isVisible = true
+					currentSession.brBox?.isManaged = true
+				}
+			}
 		}
 
 		val disableHighlightCheck = CheckBox("Disable syntactic highlights").apply {
@@ -215,11 +288,13 @@ class XmlXsltValidatorApp : Application() {
 
 		return HBox(
 			8.0,
-			validateBtn,
+			validateAntTransformBtn,
 			searchBtn,
 			xpathMenu,
-			openXsltBtn,
-			saveXsltBtn,
+			xsltRadio,
+			brRadio,
+			openStack,
+			saveStack,
 			openXmlBtn,
 			disableHighlightCheck
 		).apply {
@@ -253,6 +328,16 @@ class XmlXsltValidatorApp : Application() {
 			padding = Insets(8.0)
 			minWidth = 0.0
 		}
+		val brTreeView = TreeView<String>().apply {
+			isShowRoot = true
+		}
+		val brHeader = Label("Business Rule")
+		val brBox = VBox(4.0, brHeader, brTreeView).apply {
+			padding = Insets(8.0)
+			minWidth = 0.0
+			isVisible = false
+			isManaged = false
+		}
 		val xmlArea = createHighlightingCodeArea(false)
 		val resultArea = createHighlightingCodeArea(true).apply {
 			isEditable = false
@@ -282,7 +367,9 @@ class XmlXsltValidatorApp : Application() {
 			minHeight = 0.0
 		}
 
-		val topSplit = SplitPane(xsltBox, xmlBox).apply {
+		// теперь стек для XSLT/BR
+		val xsltOrBrStack = StackPane(xsltBox, brBox)
+		val topSplit = SplitPane(xsltOrBrStack, xmlBox).apply {
 			orientation = Orientation.HORIZONTAL
 			setDividerPositions(0.5)
 			minHeight = 0.0
@@ -309,9 +396,13 @@ class XmlXsltValidatorApp : Application() {
 				}
 			}
 		}
+
 		val session = DocSession(tab, xsltArea, xmlArea, resultArea, nanCountLabel).also {
+			it.brTree = brTreeView
 			it.xsltOverlay = xsltOverlay
 			it.xsltStatusLabel = xsltStatusLabel
+			it.xsltBox = xsltBox
+			it.brBox = brBox
 		}
 		sessions[tab] = session
 		hookOverlayRedraw(session)
@@ -494,7 +585,7 @@ class XmlXsltValidatorApp : Application() {
 		title: String,
 		lastPath: Path?,
 		description: String,
-		vararg masks: String
+		vararg masks: String,
 	): FileChooser = FileChooser().apply {
 		this.title = title
 		extensionFilters.add(FileChooser.ExtensionFilter(description, *masks))
@@ -532,7 +623,7 @@ class XmlXsltValidatorApp : Application() {
 		session: DocSession,
 		path: Path,
 		area: CodeArea,
-		setPath: (Path) -> Unit
+		setPath: (Path) -> Unit,
 	) {
 		val file = path.toFile()
 		if (area == session.xsltArea) {
@@ -550,7 +641,7 @@ class XmlXsltValidatorApp : Application() {
 		session: DocSession,
 		path: Path,
 		area: CodeArea,
-		setPath: (Path) -> Unit
+		setPath: (Path) -> Unit,
 	) {
 		val task = object : Task<String>() {
 			override fun call(): String {
@@ -662,135 +753,226 @@ class XmlXsltValidatorApp : Application() {
 	 */
 	private fun doTransform(owner: Stage) {
 		val s = currentSession
-		val status = StringBuilder()
-		val saxonWarnAcc = mutableListOf<IntRange>()
-		val saxonErrAcc = mutableListOf<IntRange>()
-		val saxonFatalAcc = mutableListOf<IntRange>()
 
-		try {
-			SAXParserFactory.newInstance().apply {
-				isNamespaceAware = true
-				isValidating = false
-			}.newSAXParser().parse(
-				InputSource(StringReader(s.xmlArea.text)),
-				object : DefaultHandler() {
-					override fun warning(e: SAXParseException) {
-						status.append("WARNING in XML [line=${e.lineNumber},col=${e.columnNumber}]: ${e.message}\n")
-					}
+		when (s.mode) {
+			TransformMode.BR -> {
+				val status = StringBuilder()
+				val xmlText = s.xmlArea.text.trim()
+				if (xmlText.isEmpty()) {
+					showStatus(owner, "XML is empty.")
+					return
+				}
+				val brRoot = s.brRoot ?: run {
+					showStatus(owner, "BR is not loaded. Use “Open BR…” first.")
+					return
+				}
 
-					override fun error(e: SAXParseException) {
-						status.append("ERROR   in XML [line=${e.lineNumber},col=${e.columnNumber}]: ${e.message}\n")
-					}
+				val proc = Processor(false)
+				val doc = try {
+					buildDocForXPath(proc, xmlText)
+				} catch (e: Exception) {
+					showStatus(owner, "XML parsing failed:\n${e.message}")
+					return
+				}
+				val xpc = proc.newXPathCompiler().also { setDefaultNsFromDoc(it, doc) }
 
-					override fun fatalError(e: SAXParseException) {
-						status.append("FATAL   in XML [line=${e.lineNumber},col=${e.columnNumber}]: ${e.message}\n")
+				fun xpathToString(expr: String): String {
+					val valSeq = xpc.evaluate(expr, doc)
+					val it = valSeq.iterator()
+					return if (!it.hasNext()) "" else it.next().stringValue
+				}
+
+				fun kindOf(type: String?): String =
+					type?.substringAfterLast('.')?.lowercase() ?: ""
+
+				fun evalPredicate(p: ru.ravel.xsltsandbox.models.br.Predicate, vars: Map<String, String>): Boolean {
+					val varName = p.variable?.value ?: return false
+					val left = vars[varName] ?: ""
+					val right = p.constant?.value ?: ""
+					return left == right
+				}
+
+				fun evalQuantifier(q: ru.ravel.xsltsandbox.models.br.Quantifier): Boolean {
+					val vd = q.variableDefinition
+					val vars: Map<String, String> =
+						if (vd?.name != null && vd.xpath?.value != null) {
+							mapOf(vd.name to xpathToString(vd.xpath.value))
+						} else emptyMap()
+
+					val preds = q.predicates.orEmpty()
+					return preds.all { evalPredicate(it, vars) }
+				}
+
+				fun evalConnective(c: ru.ravel.xsltsandbox.models.br.Connective): Boolean {
+					val k = kindOf(c.type)
+					val childConns = c.connectives.orEmpty()
+					val childQuants = c.quantifiers.orEmpty()
+
+					fun evalChildrenAsAnd(): Boolean =
+						childConns.all { evalConnective(it) } && childQuants.all { evalQuantifier(it) }
+
+					fun evalChildrenAsOr(): Boolean =
+						(childConns.any { evalConnective(it) }) || (childQuants.any { evalQuantifier(it) })
+
+					return when (k) {
+						"and" -> evalChildrenAsAnd()
+						"or" -> evalChildrenAsOr()
+						"not" -> !evalChildrenAsAnd()
+						else -> evalChildrenAsAnd()
 					}
 				}
-			)
-			status.append("XML is well-formed.\n")
-		} catch (ex: Exception) {
-			status.append("XML parsing halted: ${ex.message}\n")
-		}
 
-		val tfFactory: TransformerFactory = TransformerFactory.newInstance(
-			"net.sf.saxon.TransformerFactoryImpl",
-			XmlXsltValidatorApp::class.java.classLoader
-		).apply {
-			errorListener = object : ErrorListener {
-				override fun warning(ex: TransformerException) = report(Sev.WARNING, ex)
-				override fun error(ex: TransformerException) = report(Sev.ERROR, ex)
-				override fun fatalError(ex: TransformerException) = report(Sev.FATAL, ex)
+				val ok = try {
+					evalConnective(brRoot)
+				} catch (e: Exception) {
+					showStatus(owner, "BR evaluation error:\n${e.message}")
+					return
+				}
 
-				private fun report(sev: Sev, ex: TransformerException) {
-					val loc = ex.locator
-					val levelText = when (sev) {
-						Sev.WARNING -> "WARNING in XSLT"
-						Sev.ERROR -> "ERROR   in XSLT"
-						Sev.FATAL -> "FATAL   in XSLT"
-					}
-					if (loc != null) {
-						status.append("$levelText [line=${loc.lineNumber},col=${loc.columnNumber}]: ${ex.message}\n")
-						val r = computeXsltErrorRange(s.xsltArea.text, loc.lineNumber, loc.columnNumber)
-						when (sev) {
-							Sev.WARNING -> saxonWarnAcc += r
-							Sev.ERROR -> saxonErrAcc += r
-							Sev.FATAL -> saxonFatalAcc += r
-						}
-					} else {
-						status.append("$levelText: ${ex.message}\n")
-					}
+				val resultText = "BR result: ${if (ok) "TRUE" else "FALSE"}"
+				status.appendLine(resultText)
+
+				Platform.runLater {
+					s.resultArea.replaceText(resultText)
+					highlightAllMatches(s.resultArea, currentQuery, true)
+					s.nanCountLabel.text = ""
+					s.nanCountLabel.isVisible = false
+					showStatus(owner, status.toString())
 				}
 			}
-		}
 
-		val templates = try {
-			tfFactory.newTemplates(StreamSource(StringReader(s.xsltArea.text))).also {
-				status.append("XSLT compiled successfully.\n")
-				s.xsltSyntaxErrorRanges = saxonErrAcc + saxonFatalAcc
-				highlightAllMatches(s.xsltArea, currentQuery, false)
-				appendBadSelectWarnings(s, status)
-				saxonWarnAcc.addAll(s.xsltBadSelectRanges)
-				s.xsltWarningRanges = saxonWarnAcc
+			TransformMode.XSLT -> {
+				val status = StringBuilder()
+				val saxonWarnAcc = mutableListOf<IntRange>()
+				val saxonErrAcc = mutableListOf<IntRange>()
+				val saxonFatalAcc = mutableListOf<IntRange>()
+
+				try {
+					SAXParserFactory.newInstance().apply {
+						isNamespaceAware = true
+						isValidating = false
+					}.newSAXParser().parse(
+						InputSource(StringReader(s.xmlArea.text)),
+						object : DefaultHandler() {
+							override fun warning(e: SAXParseException) {
+								status.append("WARNING in XML [line=${e.lineNumber},col=${e.columnNumber}]: ${e.message}\n")
+							}
+
+							override fun error(e: SAXParseException) {
+								status.append("ERROR   in XML [line=${e.lineNumber},col=${e.columnNumber}]: ${e.message}\n")
+							}
+
+							override fun fatalError(e: SAXParseException) {
+								status.append("FATAL   in XML [line=${e.lineNumber},col=${e.columnNumber}]: ${e.message}\n")
+							}
+						}
+					)
+					status.append("XML is well-formed.\n")
+				} catch (ex: Exception) {
+					status.append("XML parsing halted: ${ex.message}\n")
+				}
+
+				val tfFactory: TransformerFactory = TransformerFactory.newInstance(
+					"net.sf.saxon.TransformerFactoryImpl",
+					XmlXsltValidatorApp::class.java.classLoader
+				).apply {
+					errorListener = object : ErrorListener {
+						override fun warning(ex: TransformerException) = report(Sev.WARNING, ex)
+						override fun error(ex: TransformerException) = report(Sev.ERROR, ex)
+						override fun fatalError(ex: TransformerException) = report(Sev.FATAL, ex)
+
+						private fun report(sev: Sev, ex: TransformerException) {
+							val loc = ex.locator
+							val levelText = when (sev) {
+								Sev.WARNING -> "WARNING in XSLT"
+								Sev.ERROR -> "ERROR   in XSLT"
+								Sev.FATAL -> "FATAL   in XSLT"
+							}
+							if (loc != null) {
+								status.append("$levelText [line=${loc.lineNumber},col=${loc.columnNumber}]: ${ex.message}\n")
+								val r = computeXsltErrorRange(s.xsltArea.text, loc.lineNumber, loc.columnNumber)
+								when (sev) {
+									Sev.WARNING -> saxonWarnAcc += r
+									Sev.ERROR -> saxonErrAcc += r
+									Sev.FATAL -> saxonFatalAcc += r
+								}
+							} else {
+								status.append("$levelText: ${ex.message}\n")
+							}
+						}
+					}
+				}
+
+				val templates = try {
+					tfFactory.newTemplates(StreamSource(StringReader(s.xsltArea.text))).also {
+						status.append("XSLT compiled successfully.\n")
+						s.xsltSyntaxErrorRanges = saxonErrAcc + saxonFatalAcc
+						highlightAllMatches(s.xsltArea, currentQuery, false)
+						appendBadSelectWarnings(s, status)
+						saxonWarnAcc.addAll(s.xsltBadSelectRanges)
+						s.xsltWarningRanges = saxonWarnAcc
+						Platform.runLater {
+							val errs = s.xsltSyntaxErrorRanges.size
+							val warns = s.xsltWarningRanges.size
+							s.xsltStatusLabel?.text = "Errors: $errs, Warnings: $warns"
+							s.xsltStatusLabel?.isVisible = (errs + warns) > 0
+						}
+					}
+				} catch (ex: TransformerException) {
+					s.xsltSyntaxErrorRanges = saxonErrAcc + saxonFatalAcc
+					s.xsltWarningRanges = saxonWarnAcc + s.xsltBadSelectRanges
+					highlightAllMatches(s.xsltArea, currentQuery, false)
+					appendBadSelectWarnings(s, status)
+					Platform.runLater {
+						val errs = s.xsltSyntaxErrorRanges.size
+						val warns = s.xsltWarningRanges.size
+						s.xsltStatusLabel?.text = buildString {
+							if (errs > 0) append("Errors: $errs")
+							if (warns > 0) {
+								if (errs > 0) append(", ")
+								append("Warnings: $warns")
+							}
+						}
+						s.xsltStatusLabel?.isVisible = (errs + warns) > 0
+						redrawXsltOverlay(s)
+						showStatus(owner, status.toString())
+					}
+					return
+				}
+
+				val writer = StringWriter()
+				try {
+					templates.newTransformer().apply {
+						errorListener = tfFactory.errorListener
+					}.transform(
+						StreamSource(StringReader(s.xmlArea.text)),
+						StreamResult(writer)
+					)
+				} catch (ex: TransformerException) {
+					System.err.println(ex.message)
+				}
+
 				Platform.runLater {
+					val resultText = writer.toString()
+					s.resultArea.replaceText(resultText)
+					highlightAllMatches(s.resultArea, currentQuery, true)
+					val nanCount = Regex("\\bNaN\\b").findAll(resultText).count()
+					s.nanCountLabel.text = "NaNs: $nanCount"
+					s.nanCountLabel.isVisible = nanCount > 0
 					val errs = s.xsltSyntaxErrorRanges.size
 					val warns = s.xsltWarningRanges.size
-					s.xsltStatusLabel?.text = "Errors: $errs, Warnings: $warns"
-					s.xsltStatusLabel?.isVisible = (errs + warns) > 0
-				}
-			}
-		} catch (ex: TransformerException) {
-			s.xsltSyntaxErrorRanges = saxonErrAcc + saxonFatalAcc
-			s.xsltWarningRanges = saxonWarnAcc + s.xsltBadSelectRanges
-			highlightAllMatches(s.xsltArea, currentQuery, false)
-			appendBadSelectWarnings(s, status)
-			Platform.runLater {
-				val errs = s.xsltSyntaxErrorRanges.size
-				val warns = s.xsltWarningRanges.size
-				s.xsltStatusLabel?.text = buildString {
-					if (errs > 0) append("Errors: $errs")
-					if (warns > 0) {
-						if (errs > 0) append(", ")
-						append("Warnings: $warns")
+					s.xsltStatusLabel?.text = buildString {
+						if (errs > 0) append("Errors: $errs")
+						if (warns > 0) {
+							if (errs > 0) append(", ")
+							append("Warnings: $warns")
+						}
 					}
-				}
-				s.xsltStatusLabel?.isVisible = (errs + warns) > 0
-				redrawXsltOverlay(s)
-				showStatus(owner, status.toString())
-			}
-			return
-		}
-
-		val writer = StringWriter()
-		try {
-			templates.newTransformer().apply {
-				errorListener = tfFactory.errorListener
-			}.transform(
-				StreamSource(StringReader(s.xmlArea.text)),
-				StreamResult(writer)
-			)
-		} catch (ex: TransformerException) {
-			System.err.println(ex.message)
-		}
-
-		Platform.runLater {
-			val resultText = writer.toString()
-			s.resultArea.replaceText(resultText)
-			highlightAllMatches(s.resultArea, currentQuery, true)
-			val nanCount = Regex("\\bNaN\\b").findAll(resultText).count()
-			s.nanCountLabel.text = "NaNs: $nanCount"
-			s.nanCountLabel.isVisible = nanCount > 0
-			val errs = s.xsltSyntaxErrorRanges.size
-			val warns = s.xsltWarningRanges.size
-			s.xsltStatusLabel?.text = buildString {
-				if (errs > 0) append("Errors: $errs")
-				if (warns > 0) {
-					if (errs > 0) append(", ")
-					append("Warnings: $warns")
+					s.xsltStatusLabel?.isVisible = (errs + warns) > 0
+					showStatus(owner, status.toString())
+					appendBadSelectWarnings(s, status)
 				}
 			}
-			s.xsltStatusLabel?.isVisible = (errs + warns) > 0
-			showStatus(owner, status.toString())
-			appendBadSelectWarnings(s, status)
 		}
 	}
 
@@ -961,7 +1143,7 @@ class XmlXsltValidatorApp : Application() {
 
 	private fun appendBadSelectWarnings(
 		session: DocSession,
-		status: StringBuilder
+		status: StringBuilder,
 	) {
 		val smart = SmartOptions(
 			allowAttributeShortcut = true,
@@ -1030,7 +1212,7 @@ class XmlXsltValidatorApp : Application() {
 		overlay: Canvas,
 		start: Int,
 		endEx: Int,
-		color: Color
+		color: Color,
 	) {
 		if (start >= endEx) return
 
@@ -1062,7 +1244,7 @@ class XmlXsltValidatorApp : Application() {
 		x0: Double,
 		x1: Double,
 		y: Double,
-		color: Color
+		color: Color,
 	) {
 		val step = UNDER_STEP
 		val amp = UNDER_AMP
@@ -1642,7 +1824,6 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
-
 	private fun toggleFold(area: CodeArea, line: Int) {
 		val text = area.text
 		val startOffset = area.getAbsolutePosition(line, 0)
@@ -1703,7 +1884,7 @@ class XmlXsltValidatorApp : Application() {
 			val indexInSiblings: Int,
 			val openStart: Int,
 			val openEnd: Int,
-			val childCounters: MutableMap<String, Int> = hashMapOf()
+			val childCounters: MutableMap<String, Int> = hashMapOf(),
 		)
 
 		val openRx = Regex("""<([A-Za-z_][\w:.\-]*)([^>]*?)>""")
@@ -1834,7 +2015,7 @@ class XmlXsltValidatorApp : Application() {
 		owner: Stage,
 		title: String,
 		task: Task<T>,
-		onDone: (T?) -> Unit = {}
+		onDone: (T?) -> Unit = {},
 	) {
 		val bar = ProgressBar().apply { prefWidth = 380.0 }
 		val msg = Label("Starting…")
@@ -1853,6 +2034,23 @@ class XmlXsltValidatorApp : Application() {
 		task.setOnCancelled { dlg.close() }
 		Thread(task, "progress-task").apply { isDaemon = true }.start()
 		dlg.show()
+	}
+
+
+	private fun toTreeItem(connective: Connective): TreeItem<String> {
+//		val rootItem = TreeItem(connective.type.substringAfterLast("."))
+		val rootItem = TreeItem(connective.type.split(", ")[0].substringAfterLast("."))
+		connective.connectives?.forEach { rootItem.children.add(toTreeItem(it)) }
+
+		connective.quantifiers?.forEach { q ->
+			val qItem = TreeItem("The ${q.variableDefinition?.name}")
+			q.predicates?.forEach { p ->
+				p.variable?.value?.let { qItem.children.add(TreeItem(it)) }
+				p.constant?.value?.let { qItem.children.add(TreeItem(it)) }
+			}
+			rootItem.children.add(qItem)
+		}
+		return rootItem
 	}
 
 
