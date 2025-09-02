@@ -20,6 +20,7 @@ import javafx.scene.input.KeyCode
 import javafx.scene.input.KeyEvent
 import javafx.scene.layout.*
 import javafx.scene.paint.Color
+import javafx.stage.DirectoryChooser
 import javafx.stage.FileChooser
 import javafx.stage.Modality
 import javafx.stage.Stage
@@ -39,6 +40,7 @@ import org.xml.sax.helpers.DefaultHandler
 import ru.ravel.xsltsandbox.models.*
 import ru.ravel.xsltsandbox.models.br.*
 import ru.ravel.xsltsandbox.utils.XmlUtil
+import java.io.File
 import java.io.StringReader
 import java.io.StringWriter
 import java.nio.file.*
@@ -52,6 +54,7 @@ import javax.xml.transform.TransformerFactory
 import javax.xml.transform.sax.SAXSource
 import javax.xml.transform.stream.StreamResult
 import javax.xml.transform.stream.StreamSource
+import kotlin.io.path.absolutePathString
 
 
 class XmlXsltValidatorApp : Application() {
@@ -77,6 +80,10 @@ class XmlXsltValidatorApp : Application() {
 	private lateinit var config: AppConfig
 	private var disableSyntaxHighlighting = false
 	private val foldedParagraphs = mutableSetOf<Int>()
+	private lateinit var dirField: TextField
+	private lateinit var fileTree: TreeView<Path>
+	private lateinit var xsltRadio: RadioButton
+	private lateinit var brRadio: RadioButton
 
 	@Volatile
 	private var suspendHighlighting = 0
@@ -125,9 +132,105 @@ class XmlXsltValidatorApp : Application() {
 
 		val topBar = buildToolBar()
 
+		dirField = TextField().apply {
+			promptText = "Выберите папку..."
+			isEditable = false
+		}
+		fileTree = TreeView<Path>().apply {
+			isShowRoot = false
+			prefWidth = 250.0
+			setCellFactory {
+				object : TreeCell<Path>() {
+					override fun updateItem(item: Path?, empty: Boolean) {
+						super.updateItem(item, empty)
+						text = if (empty || item == null) {
+							null
+						} else {
+							item.fileName?.toString() ?: item.toString()
+						}
+					}
+				}
+			}
+			setOnMouseClicked { event ->
+				if (event.clickCount == 2) {
+					val item = fileTree.selectionModel.selectedItem?.value ?: return@setOnMouseClicked
+					if (Files.isDirectory(item)) return@setOnMouseClicked
+
+					val session = currentSession
+					when {
+						item.toString().endsWith(".xsl", true) || item.toString().endsWith(".xslt", true) -> {
+							loadFileIntoAreaAsync(session, item, session.xsltArea) { loaded ->
+								session.xsltPath = loaded
+								session.updateTabTitle()
+							}
+							session.mode = TransformMode.XSLT
+							xsltRadio.isSelected = true
+						}
+
+						item.fileName.toString().equals("Properties.xml", true) -> {
+							val mapper = XmlMapper().registerKotlinModule()
+							val bizRule = mapper.readValue(item.toFile(), BizRuleActivityDefinition::class.java)
+							val innerXml = StringEscapeUtils.unescapeXml(bizRule.xmlRule.value)
+
+							val rootNode: Any = if (innerXml.trim().startsWith("<Quantifier")) {
+								mapper.readValue(innerXml, Quantifier::class.java)
+							} else {
+								mapper.readValue(innerXml, Connective::class.java)
+							}
+
+							when (rootNode) {
+								is Quantifier -> {
+									session.brRootQuant = rootNode
+									session.brRoot = null
+									session.brTree?.root = toTreeItem(rootNode)
+								}
+
+								is Connective -> {
+									session.brRoot = rootNode
+									session.brRootQuant = null
+									session.brTree?.root = toTreeItem(rootNode)
+								}
+							}
+							session.brTree?.isShowRoot = true
+							expandAll(session.brTree?.root ?: return@setOnMouseClicked)
+							session.mode = TransformMode.BR
+							brRadio.isSelected = true
+						}
+
+						else -> {
+							loadFileIntoAreaAsync(session, item, session.xmlArea) { session.xmlPath = it }
+						}
+					}
+				}
+			}
+		}
+		val chooseBtn = Button("Открыть процесс…").apply {
+			setOnAction {
+				val initialDir = currentSession.processPath?.absolutePathString()?.let { File(it).parentFile }
+				val chooser = DirectoryChooser().apply {
+					title = "Выберите рабочую папку"
+					if (initialDir?.exists() == true) {
+						initialDirectory = initialDir
+					}
+				}
+				val dir = chooser.showDialog(primaryStage) ?: return@setOnAction
+				dirField.text = dir.name
+				fileTree.root = buildFileTree(dir.toPath())
+				currentSession.processPath = dir.toPath()
+			}
+		}
+		val fileTreeBox = VBox(
+			HBox(5.0, dirField, chooseBtn).apply { padding = Insets(5.0) },
+			fileTree
+		).apply {
+			VBox.setVgrow(fileTree, Priority.ALWAYS)
+			prefWidth = 260.0
+		}
+
 		val root = BorderPane().apply {
 			top = topBar
-			center = tabPane //mainSplit
+			center = tabPane
+			left = fileTreeBox
 		}
 
 		val scene = Scene(root, 1200.0, 800.0).apply {
@@ -247,10 +350,10 @@ class XmlXsltValidatorApp : Application() {
 			prefWidth = 100.0
 		}
 
-		val xsltRadio = RadioButton("XSLT").apply {
+		xsltRadio = RadioButton("XSLT").apply {
 			isSelected = true
 		}
-		val brRadio = RadioButton("BR")
+		brRadio = RadioButton("BR")
 		val modeGroup = ToggleGroup().apply {
 			xsltRadio.toggleGroup = this
 			brRadio.toggleGroup = this
@@ -455,6 +558,20 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
+	private fun buildFileTree(path: Path): TreeItem<Path> {
+		val root = TreeItem(path)
+		if (Files.isDirectory(path)) {
+			try {
+				Files.list(path).forEach { child ->
+					root.children.add(buildFileTree(child))
+				}
+			} catch (_: Exception) {
+			}
+		}
+		return root
+	}
+
+
 	private fun startWatchThread() {
 		Thread({
 			try {
@@ -648,7 +765,8 @@ class XmlXsltValidatorApp : Application() {
 				val s = sessions[tab]!!
 				TabState(
 					xml = s.xmlPath?.toString(),
-					xslt = s.xsltPath?.toString()
+					xslt = s.xsltPath?.toString(),
+					process = s.processPath?.toString(),
 				)
 			}
 			val activeIndex = workTabs.indexOf(tabPane.selectionModel.selectedItem).coerceAtLeast(0)
@@ -751,6 +869,16 @@ class XmlXsltValidatorApp : Application() {
 				loadFileIntoArea(session, path, session.xsltArea) { loaded ->
 					session.xsltPath = loaded
 					session.updateTabTitle()
+				}
+			}
+		}
+		state.process?.let { p ->
+			val procPath = Paths.get(p)
+			if (Files.isDirectory(procPath)) {
+				session.processPath = procPath
+				Platform.runLater {
+					dirField.text = procPath.toAbsolutePath().toString()
+					fileTree.root = buildFileTree(procPath)
 				}
 			}
 		}
@@ -1214,6 +1342,7 @@ class XmlXsltValidatorApp : Application() {
 			val bScreenOpt = area.getCharacterBoundsOnScreen(parStart, parEnd)
 			if (!bScreenOpt.isPresent) continue
 			val bScreen = bScreenOpt.get()
+
 
 			// screen -> scene -> overlay
 			val root = overlay.scene.root
