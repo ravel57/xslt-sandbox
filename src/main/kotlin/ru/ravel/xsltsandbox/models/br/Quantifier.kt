@@ -16,5 +16,9 @@ data class Quantifier(
 
 	@field:JacksonXmlElementWrapper(useWrapping = false)
 	@field:JacksonXmlProperty(localName = "Quantifier")
-	val quantifiers: List<Quantifier>? = null
+	val quantifiers: List<Quantifier>? = null,
+
+	@field:JacksonXmlElementWrapper(useWrapping = false)
+	@field:JacksonXmlProperty(localName = "Connective")
+	val connectives: List<Connective>? = null,
 )

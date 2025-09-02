@@ -2164,10 +2164,11 @@ class XmlXsltValidatorApp : Application() {
 			node.variableDefinition?.let { children.add(toTreeItem(it)) }
 			node.predicates?.forEach { children.add(toTreeItem(it)) }
 			node.quantifiers?.forEach { children.add(toTreeItem(it)) }
+			node.connectives?.forEach { children.add(toTreeItem(it)) }
 		}
 
 		is Predicate -> TreeItem(kindOf(node.type)).apply {
-			node.variable?.value?.let { children.add(TreeItem(it)) }
+			node.variables.forEach { v -> v.value.let { children.add(TreeItem(it)) } }
 			node.constant?.value?.let { children.add(TreeItem(it)) }
 		}
 
@@ -2210,19 +2211,50 @@ class XmlXsltValidatorApp : Application() {
 		p: Predicate,
 		compiler: XPathCompiler,
 		doc: XdmNode,
-		values: Map<String, String>,
+		vmap: Map<String, String>,
 	): Boolean {
 		return when (kindOf(p.type)) {
-			"true" -> true
-			"false" -> false
+			"true" -> {
+				true
+			}
+
+			"false" -> {
+				false
+			}
+
 			"textequality" -> {
-				val varName = p.variable?.value ?: return false
-				values[varName]?.trim() == (p.constant?.value ?: "").trim()
+				val vars = p.variables.map { it.value }
+				val constVal = p.constant?.value ?: ""
+
+				when {
+					vars.size == 1 && constVal.isNotEmpty() -> {
+						(vmap[vars[0]] ?: "") == constVal
+					}
+
+					vars.size == 2 -> {
+						(vmap[vars[0]] ?: "") == (vmap[vars[1]] ?: "")
+					}
+
+					else -> {
+						false
+					}
+				}
 			}
 
 			"textinequality" -> {
-				val varName = p.variable?.value ?: return false
-				values[varName]?.trim() != (p.constant?.value ?: "").trim()
+				val vars: List<String> = p.variables.map { it.value }
+				val constVal: String = p.constant?.value ?: ""
+
+				if (vars.size == 1) {
+					val vval: String = vmap[vars[0]]?.trim() ?: ""
+					vval != constVal.trim()
+				} else if (vars.size == 2) {
+					val v1: String = vmap[vars[0]]?.trim() ?: ""
+					val v2: String = vmap[vars[1]]?.trim() ?: ""
+					v1 != v2
+				} else {
+					false
+				}
 			}
 
 			else -> false
@@ -2234,27 +2266,35 @@ class XmlXsltValidatorApp : Application() {
 		q: Quantifier,
 		compiler: XPathCompiler,
 		doc: XdmNode,
+		parentVars: Map<String, String> = emptyMap()
 	): Boolean {
 		val vd = q.variableDefinition ?: return false
 		val xpath = vd.xpath?.value ?: return false
 
 		val values: List<String> = xpathToValues(xpath, compiler, doc)
-		if (values.isEmpty()) return false
-
 		val preds = q.predicates.orEmpty()
 		val quants = q.quantifiers.orEmpty()
 
 		fun okFor(value: String): Boolean {
-			return preds.all { evalPredicate(it, compiler, doc, mapOf(vd.name to value)) }
-					&& quants.all { evalQuantifier(it, compiler, doc) }
+			val local = mapOf(vd.name to value)
+			val vmap = parentVars + local
+			return preds.all { evalPredicate(it, compiler, doc, vmap) }
+					&& quants.all { evalQuantifier(it, compiler, doc, vmap) }
 		}
 
 		return when (kindOf(q.type)) {
-			"some" -> values.any { okFor(it) }
-			"exists" -> values.any { okFor(it) }
-			"all" -> values.all { okFor(it) }
-			"forall" -> values.all { okFor(it) }
-			"the" -> values.any { okFor(it) }
+			"some", "exists", "the" -> {
+				values.any { okFor(it) }
+			}
+
+			"all", "forall" -> {
+				values.isNotEmpty() && values.all { okFor(it) }
+			}
+
+			"no" -> {
+				values.isEmpty() || values.none { okFor(it) }
+			}
+
 			else -> false
 		}
 	}
@@ -2271,11 +2311,17 @@ class XmlXsltValidatorApp : Application() {
 
 		val vmap: Map<String, String> = preds
 			.mapNotNull { p ->
-				val varName = p.variable?.value
+				val vars = p.variables.map { it.value }
 				val constVal = p.constant?.value
 				when {
-					varName != null && constVal != null -> varName to constVal
-					varName != null -> varName to "" // если константы нет
+					(vars.size == 1 && constVal != null) -> {
+						vars[0] to constVal
+					}
+
+					vars.size == 1 -> {
+						vars[0] to ""
+					}
+
 					else -> null
 				}
 			}
