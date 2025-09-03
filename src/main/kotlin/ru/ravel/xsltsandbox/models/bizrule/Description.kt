@@ -1,9 +1,9 @@
-package ru.ravel.xsltsandbox.models.br
+package ru.ravel.xsltsandbox.models.bizrule
 
 import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlProperty
 
 
-data class DisplayName(
+data class Description(
 	@JacksonXmlProperty(localName = "MnemonicId")
-	val mnemonicId: String
+	val mnemonicId: String? = null
 )

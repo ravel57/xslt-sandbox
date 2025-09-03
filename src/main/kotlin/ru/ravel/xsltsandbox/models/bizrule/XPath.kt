@@ -1,4 +1,4 @@
-package ru.ravel.xsltsandbox.models.br
+package ru.ravel.xsltsandbox.models.bizrule
 
 import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties

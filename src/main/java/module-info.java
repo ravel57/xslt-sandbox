@@ -17,6 +17,6 @@ module ru.ravel.xsltsandbox {
 	requires org.apache.commons.text;
 
 	opens ru.ravel.xsltsandbox.models to com.fasterxml.jackson.databind, com.fasterxml.jackson.module.kotlin, kotlin.reflect;
-	opens ru.ravel.xsltsandbox.models.br to com.fasterxml.jackson.databind, com.fasterxml.jackson.module.kotlin, kotlin.reflect;
+	opens ru.ravel.xsltsandbox.models.bizrule to com.fasterxml.jackson.databind, com.fasterxml.jackson.module.kotlin, kotlin.reflect;
 	exports ru.ravel.xsltsandbox;
 }

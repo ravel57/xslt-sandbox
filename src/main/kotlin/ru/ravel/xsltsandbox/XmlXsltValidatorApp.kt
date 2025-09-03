@@ -38,7 +38,7 @@ import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
 import ru.ravel.xsltsandbox.models.*
-import ru.ravel.xsltsandbox.models.br.*
+import ru.ravel.xsltsandbox.models.bizrule.*
 import ru.ravel.xsltsandbox.utils.XmlUtil
 import java.io.File
 import java.io.StringReader
@@ -204,7 +204,7 @@ class XmlXsltValidatorApp : Application() {
 				}
 			}
 		}
-		val chooseBtn = Button("Открыть процесс…").apply {
+		val chooseBtn = Button("Открыть…").apply {
 			setOnAction {
 				val initialDir = currentSession.processPath?.absolutePathString()?.let { File(it).parentFile }
 				val chooser = DirectoryChooser().apply {
@@ -638,11 +638,14 @@ class XmlXsltValidatorApp : Application() {
 		val msg = Label("Pasting… 0%")
 		val cancelBtn = Button("Cancel")
 		val box = VBox(10.0, msg, bar, HBox(10.0, cancelBtn)).apply {
-			padding = Insets(14.0); alignment = Pos.CENTER_LEFT
+			padding = Insets(14.0)
+			alignment = Pos.CENTER_LEFT
 		}
 		val dlg = Stage().apply {
-			initOwner(currentStage); initModality(Modality.WINDOW_MODAL)
-			title = "Pasting large text"; scene = Scene(box)
+			initOwner(currentStage)
+			initModality(Modality.WINDOW_MODAL)
+			title = "Pasting large text"
+			scene = Scene(box)
 		}
 
 		val startSel = area.selection.start
@@ -1638,11 +1641,14 @@ class XmlXsltValidatorApp : Application() {
 		}
 		val meta = buildXPathWithMeta(area.text, area.selection.start)
 		if (meta.xpath.isBlank()) {
-			showStatus(owner, "Не удалось построить XPath"); return
+			showStatus(owner, "Не удалось построить XPath")
+			return
 		}
 		searchDialog?.let { dlg ->
 			(dlg.scene.lookup("#xpathField") as TextField).text = meta.xpath
-			dlg.toFront(); dlg.requestFocus(); return
+			dlg.toFront()
+			dlg.requestFocus()
+			return
 		}
 		/* ─────────────── GUI ─────────────── */
 		/** одна строка «имя + ChoiceBox» */
@@ -1653,7 +1659,8 @@ class XmlXsltValidatorApp : Application() {
 			if (seg.predicate.isNotEmpty()) opts.add("by index ${seg.predicate}")
 			opts.add("no predicate")
 			seg.attrs.forEach { (k, v) -> opts.add("@$k='$v'") }
-			cb.items.addAll(opts); cb.value = opts[0]
+			cb.items.addAll(opts)
+			cb.value = opts[0]
 			return HBox(6.0, lbl, cb)
 		}
 
@@ -1930,7 +1937,11 @@ class XmlXsltValidatorApp : Application() {
 					maxWidth = 12.0
 				}
 			} else {
-				Region().apply { prefWidth = 12.0; minWidth = 12.0; maxWidth = 12.0 }
+				Region().apply {
+					prefWidth = 12.0
+					minWidth = 12.0
+					maxWidth = 12.0
+				}
 			}
 
 			// порядок: [индикатор] [номер строки]
@@ -2138,14 +2149,23 @@ class XmlXsltValidatorApp : Application() {
 		msg.textProperty().bind(task.messageProperty())
 		val cancelBtn = Button("Cancel").apply { setOnAction { task.cancel() } }
 		val box = VBox(10.0, msg, bar, HBox(10.0, cancelBtn)).apply {
-			padding = Insets(14.0); alignment = Pos.CENTER_LEFT
+			padding = Insets(14.0)
+			alignment = Pos.CENTER_LEFT
 		}
 		val dlg = Stage().apply {
-			initOwner(owner); initModality(Modality.WINDOW_MODAL)
-			this.title = title; scene = Scene(box)
+			initOwner(owner)
+			initModality(Modality.WINDOW_MODAL)
+			this.title = title
+			scene = Scene(box)
 		}
-		task.setOnSucceeded { dlg.close(); onDone(task.value) }
-		task.setOnFailed { dlg.close(); showStatus(owner, "Operation failed:\n${task.exception?.message}") }
+		task.setOnSucceeded {
+			dlg.close()
+			onDone(task.value)
+		}
+		task.setOnFailed {
+			dlg.close()
+			showStatus(owner, "Operation failed:\n${task.exception?.message}")
+		}
 		task.setOnCancelled { dlg.close() }
 		Thread(task, "progress-task").apply { isDaemon = true }.start()
 		dlg.show()
@@ -2266,7 +2286,7 @@ class XmlXsltValidatorApp : Application() {
 		q: Quantifier,
 		compiler: XPathCompiler,
 		doc: XdmNode,
-		parentVars: Map<String, String> = emptyMap()
+		parentVars: Map<String, String> = emptyMap(),
 	): Boolean {
 		val vd = q.variableDefinition ?: return false
 		val xpath = vd.xpath?.value ?: return false
@@ -2305,11 +2325,11 @@ class XmlXsltValidatorApp : Application() {
 		compiler: XPathCompiler,
 		doc: XdmNode,
 	): Boolean {
-		val preds: List<Predicate> = c.predicates.orEmpty()
-		val quants: List<Quantifier> = c.quantifiers.orEmpty()
-		val conns: List<Connective> = c.connectives.orEmpty()
+		val predicates: List<Predicate> = c.predicates.orEmpty()
+		val quantifiers: List<Quantifier> = c.quantifiers.orEmpty()
+		val connectives: List<Connective> = c.connectives.orEmpty()
 
-		val vmap: Map<String, String> = preds
+		val vmap: Map<String, String> = predicates
 			.mapNotNull { p ->
 				val vars = p.variables.map { it.value }
 				val constVal = p.constant?.value
@@ -2327,27 +2347,33 @@ class XmlXsltValidatorApp : Application() {
 			}
 			.toMap()
 
-		val predsOk = preds.all { evalPredicate(it, compiler, doc, vmap) }
-
-		if (!predsOk) return false
-
+		val predicatesOk = predicates.all { evalPredicate(it, compiler, doc, vmap) }
+//		if (!predicatesOk) return false
 		return when (kindOf(c.type)) {
-			"and" -> conns.all { evalConnective(it, compiler, doc) } &&
-					quants.all { evalQuantifier(it, compiler, doc) }
+			"and" -> {
+				connectives.all { evalConnective(it, compiler, doc) } && quantifiers.all { evalQuantifier(it, compiler, doc) }
+			}
 
-			"or" -> conns.any { evalConnective(it, compiler, doc) } ||
-					quants.any { evalQuantifier(it, compiler, doc) }
+			"or" -> {
+				connectives.any { evalConnective(it, compiler, doc) } || quantifiers.any { evalQuantifier(it, compiler, doc) }
+			}
 
-			"not" -> conns.none { evalConnective(it, compiler, doc) } &&
-					quants.none { evalQuantifier(it, compiler, doc) }
+			"not", "no" -> {
+				connectives.none { evalConnective(it, compiler, doc) } && quantifiers.none { evalQuantifier(it, compiler, doc) }
+			}
 
-			"some", "exists", "the" ->
-				quants.any { evalQuantifier(it, compiler, doc) }
+			"some", "exists", "the" -> {
+				quantifiers.any { evalQuantifier(it, compiler, doc) }
+			}
 
-			"all", "forall" ->
-				quants.all { evalQuantifier(it, compiler, doc) }
+			"all", "forall" -> {
+				quantifiers.all { evalQuantifier(it, compiler, doc) }
+			}
 
-			else -> predsOk
+			else -> {
+				println("evalConnective - case else:\n$predicates\n$quantifiers\n$connectives")
+				predicatesOk
+			}
 		}
 	}
 
