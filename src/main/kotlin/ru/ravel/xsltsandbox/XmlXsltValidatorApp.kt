@@ -1849,10 +1849,14 @@ class XmlXsltValidatorApp : Application() {
 
 	private fun highlightTagPair(area: CodeArea, caretPos: Int) {
 		val text = area.text
-		val openTagRegex = Regex("<([A-Za-z_][\\w:.-]*)[^>]*?>")
-		val closeTagRegex = Regex("</([A-Za-z_][\\w:.-]*)\\s*>")
+		if (text.isEmpty()) {
+			return
+		}
 
-		// найти тег под курсором
+		val openTagRegex = Regex("<([A-Za-z_][\\w:.-]*)[^>/]*?>")
+		val closeTagRegex = Regex("</([A-Za-z_][\\w:.-]*)\\s*>")
+		val selfClosingRegex = Regex("<([A-Za-z_][\\w:.-]*)[^>]*/>")
+
 		val before = text.lastIndexOf('<', caretPos).takeIf { it >= 0 } ?: return
 		val after = text.indexOf('>', before).takeIf { it >= 0 } ?: return
 		val fragment = text.substring(before, after + 1)
@@ -1863,25 +1867,60 @@ class XmlXsltValidatorApp : Application() {
 		val mClose = closeTagRegex.matchEntire(fragment)
 
 		if (mOpen != null) {
+			// курсор на открывающем
 			val tagName = mOpen.groupValues[1]
-			val regex = Regex("</$tagName\\s*>")
-			regex.find(text, after)?.let { match ->
-				ranges += (before..after)
-				ranges += match.range
+			var depth = 0
+			val matcher = Regex("</?$tagName\\b[^>]*?/?>")
+
+			val all = matcher.findAll(text, after + 1)
+			for (m in all) {
+				when {
+					m.value.startsWith("</") -> {
+						if (depth == 0) {
+							ranges += (before..after)
+							ranges += m.range
+							break
+						} else depth--
+					}
+
+					selfClosingRegex.matches(m.value) -> {
+						// игнорируем самозакрывающий
+					}
+
+					else -> {
+						depth++
+					}
+				}
 			}
 		} else if (mClose != null) {
+			// курсор на закрывающем
 			val tagName = mClose.groupValues[1]
-			val regex = Regex("<$tagName\\b[^>]*?>")
-			regex.findAll(text, 0).lastOrNull { it.range.last < before }?.let { match ->
-				ranges += match.range
-				ranges += (before..after)
+			var depth = 0
+			val matcher = Regex("</?$tagName\\b[^>]*?/?>")
+
+			val all = matcher.findAll(text.substring(0, before))
+			for (m in all.toList().asReversed()) {
+				when {
+					m.value.startsWith("</") -> depth++
+					selfClosingRegex.matches(m.value) -> {
+						// игнорируем самозакрывающий
+					}
+
+					else -> {
+						if (depth == 0) {
+							ranges += m.range
+							ranges += (before..after)
+							break
+						} else depth--
+					}
+				}
 			}
 		}
 
-		// пересобираем стили
-		val base = computeSyntaxHighlightingChars(text) // твоя функция
+		// стандартная подсветка
+		val base = computeSyntaxHighlightingChars(text)
+		// доп. подсветка для парных тегов
 		val extra = MutableList(text.length) { mutableListOf<String>() }
-
 		for (r in ranges) {
 			for (i in r) {
 				if (i in extra.indices) {
@@ -1890,6 +1929,7 @@ class XmlXsltValidatorApp : Application() {
 			}
 		}
 
+		// пересобираем стили
 		val builder = StyleSpansBuilder<Collection<String>>()
 		var prev: List<String>? = null
 		var runStart = 0

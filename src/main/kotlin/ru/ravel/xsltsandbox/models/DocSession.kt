@@ -6,8 +6,8 @@ import javafx.scene.control.Tab
 import javafx.scene.control.TreeView
 import javafx.scene.layout.VBox
 import org.fxmisc.richtext.CodeArea
-import ru.ravel.xsltsandbox.models.br.Connective
-import ru.ravel.xsltsandbox.models.br.Quantifier
+import ru.ravel.xsltsandbox.models.bizrule.Connective
+import ru.ravel.xsltsandbox.models.bizrule.Quantifier
 import java.nio.charset.Charset
 import java.nio.file.Path
 
