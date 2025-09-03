@@ -19,6 +19,7 @@ data class DocSession(
 	val resultArea: CodeArea,
 	val nanCountLabel: Label,
 	var xmlPath: Path? = null,
+	var brPath: Path? = null,
 	var xsltPath: Path? = null,
 	var processPath: Path? = null,
 	var xsltSyntaxErrorRanges: List<IntRange> = emptyList(),

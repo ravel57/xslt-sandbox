@@ -129,6 +129,25 @@ class XmlXsltValidatorApp : Application() {
 			}
 		}
 		tabPane.tabs.add(plusTab)
+		tabPane.selectionModel.selectedItemProperty().addListener { _, _, newTab ->
+			val session = sessions[newTab] ?: return@addListener
+			when (session.mode) {
+				TransformMode.XSLT -> {
+					xsltRadio.isSelected = true
+					session.xsltBox?.isVisible = true
+					session.xsltBox?.isManaged = true
+					session.brBox?.isVisible = false
+					session.brBox?.isManaged = false
+				}
+				TransformMode.BR -> {
+					brRadio.isSelected = true
+					session.xsltBox?.isVisible = false
+					session.xsltBox?.isManaged = false
+					session.brBox?.isVisible = true
+					session.brBox?.isManaged = true
+				}
+			}
+		}
 
 		val topBar = buildToolBar()
 
@@ -156,14 +175,18 @@ class XmlXsltValidatorApp : Application() {
 					val item = fileTree.selectionModel.selectedItem?.value ?: return@setOnMouseClicked
 					if (Files.isDirectory(item)) return@setOnMouseClicked
 
-					val session = currentSession
+					// создаём новую вкладку
+					val newSession = createNewSessionTab(item.fileName.toString())
+					tabPane.tabs.add(tabPane.tabs.size - 1, newSession.tab)
+					tabPane.selectionModel.select(newSession.tab)
+
 					when {
 						item.toString().endsWith(".xsl", true) || item.toString().endsWith(".xslt", true) -> {
-							loadFileIntoAreaAsync(session, item, session.xsltArea) { loaded ->
-								session.xsltPath = loaded
-								session.updateTabTitle()
+							loadFileIntoAreaAsync(newSession, item, newSession.xsltArea) { loaded ->
+								newSession.xsltPath = loaded
+								newSession.updateTabTitle()
 							}
-							session.mode = TransformMode.XSLT
+							newSession.mode = TransformMode.XSLT
 							xsltRadio.isSelected = true
 						}
 
@@ -180,31 +203,33 @@ class XmlXsltValidatorApp : Application() {
 
 							when (rootNode) {
 								is Quantifier -> {
-									session.brRootQuant = rootNode
-									session.brRoot = null
-									session.brTree?.root = toTreeItem(rootNode)
+									newSession.brRootQuant = rootNode
+									newSession.brRoot = null
+									newSession.brTree?.root = toTreeItem(rootNode)
 								}
 
 								is Connective -> {
-									session.brRoot = rootNode
-									session.brRootQuant = null
-									session.brTree?.root = toTreeItem(rootNode)
+									newSession.brRoot = rootNode
+									newSession.brRootQuant = null
+									newSession.brTree?.root = toTreeItem(rootNode)
 								}
 							}
-							session.brTree?.isShowRoot = true
-							expandAll(session.brTree?.root ?: return@setOnMouseClicked)
-							session.mode = TransformMode.BR
+							newSession.brTree?.isShowRoot = true
+							expandAll(newSession.brTree?.root ?: return@setOnMouseClicked)
+							newSession.mode = TransformMode.BR
 							brRadio.isSelected = true
+							newSession.brPath = item
+							newSession.updateTabTitle()
 						}
 
 						else -> {
-							loadFileIntoAreaAsync(session, item, session.xmlArea) { session.xmlPath = it }
+							loadFileIntoAreaAsync(newSession, item, newSession.xmlArea) { newSession.xmlPath = it }
 						}
 					}
 				}
 			}
 		}
-		val chooseBtn = Button("Открыть…").apply {
+		val chooseBtn = Button("Open…").apply {
 			setOnAction {
 				val initialDir = currentSession.processPath?.absolutePathString()?.let { File(it).parentFile }
 				val chooser = DirectoryChooser().apply {
@@ -310,6 +335,8 @@ class XmlXsltValidatorApp : Application() {
 					.showOpenDialog(currentStage) ?: return@setOnAction
 				val mapper = XmlMapper().registerKotlinModule()
 				val bizRule = mapper.readValue(file, BizRuleActivityDefinition::class.java)
+				currentSession.brPath = file.toPath()
+				currentSession.updateTabTitle()
 				val innerXml = StringEscapeUtils.unescapeXml(bizRule.xmlRule.value)
 
 				val rootNode: Any = if (innerXml.trim().startsWith("<Quantifier")) {
@@ -769,6 +796,7 @@ class XmlXsltValidatorApp : Application() {
 				TabState(
 					xml = s.xmlPath?.toString(),
 					xslt = s.xsltPath?.toString(),
+					br = s.brPath?.toString(),
 					process = s.processPath?.toString(),
 				)
 			}
@@ -873,6 +901,32 @@ class XmlXsltValidatorApp : Application() {
 					session.xsltPath = loaded
 					session.updateTabTitle()
 				}
+			}
+		}
+		state.br?.let { p ->
+			val path = Paths.get(p)
+			if (Files.exists(path)) {
+				val mapper = XmlMapper().registerKotlinModule()
+				val bizRule = mapper.readValue(path.toFile(), BizRuleActivityDefinition::class.java)
+				val innerXml = StringEscapeUtils.unescapeXml(bizRule.xmlRule.value)
+				val rootNode: Any = if (innerXml.trim().startsWith("<Quantifier")) {
+					mapper.readValue(innerXml, Quantifier::class.java)
+				} else {
+					mapper.readValue(innerXml, Connective::class.java)
+				}
+				when (rootNode) {
+					is Quantifier -> {
+						session.brRootQuant = rootNode; session.brRoot = null; session.brTree?.root = toTreeItem(rootNode)
+					}
+
+					is Connective -> {
+						session.brRoot = rootNode; session.brRootQuant = null; session.brTree?.root = toTreeItem(rootNode)
+					}
+				}
+				session.brTree?.isShowRoot = true
+				expandAll(session.brTree?.root ?: return@let)
+				session.brPath = path
+				session.mode = TransformMode.BR
 			}
 		}
 		state.process?.let { p ->
@@ -2171,9 +2225,19 @@ class XmlXsltValidatorApp : Application() {
 
 
 	private fun DocSession.updateTabTitle() {
-		val name = xsltPath?.fileName?.toString() ?: return
-		tab.text = name
-		tab.tooltip = Tooltip(xsltPath.toString())
+		val xsltName = xsltPath?.fileName?.toString()
+		val brName = brPath?.fileName?.toString()
+		when {
+			(xsltName != null) -> {
+				tab.text = xsltName
+				tab.tooltip = Tooltip(xsltPath.toString())
+			}
+
+			(brName != null) -> {
+				tab.text = brName
+				tab.tooltip = Tooltip(brPath.toString())
+			}
+		}
 	}
 
 
