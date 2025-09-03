@@ -2,7 +2,7 @@ package ru.ravel.xsltsandbox.models.bizrule
 
 import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlProperty
 
-data class BizRuleActivityDefinition(
+data class BizRule(
 	@JacksonXmlProperty(isAttribute = true, localName = "ReferenceName")
 	val referenceName: String,
 

@@ -21,7 +21,6 @@ data class DocSession(
 	var xmlPath: Path? = null,
 	var brPath: Path? = null,
 	var xsltPath: Path? = null,
-	var processPath: Path? = null,
 	var xsltSyntaxErrorRanges: List<IntRange> = emptyList(),
 	var xsltBadSelectRanges: List<IntRange> = emptyList(),
 	var xsltWarningRanges: List<IntRange> = emptyList(),
@@ -35,4 +34,19 @@ data class DocSession(
 	var mode: TransformMode = TransformMode.XSLT,
 	var brRoot: Connective? = null,
 	var brRootQuant: Quantifier? = null,
-)
+	var dataDocs: String? = null,
+	var mappingPropertyFile: Path? = null,
+) {
+
+	override fun equals(other: Any?): Boolean {
+		if (this === other) return true
+		if (javaClass != other?.javaClass) return false
+		other as DocSession
+		return tab == other.tab
+	}
+
+	override fun hashCode(): Int {
+		return tab.hashCode()
+	}
+
+}

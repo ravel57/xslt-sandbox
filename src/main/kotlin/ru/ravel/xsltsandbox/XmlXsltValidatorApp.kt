@@ -34,12 +34,18 @@ import org.fxmisc.richtext.model.TwoDimensional
 import org.fxmisc.richtext.model.TwoDimensional.Bias.Forward
 import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid
 import org.kordamp.ikonli.javafx.FontIcon
+import org.w3c.dom.Element
 import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
 import ru.ravel.xsltsandbox.models.*
+import ru.ravel.xsltsandbox.models.ReferredDocument
 import ru.ravel.xsltsandbox.models.bizrule.*
+import ru.ravel.xsltsandbox.models.datamapping.DataMapping
+import ru.ravel.xsltsandbox.models.datasource.DataSource
+import ru.ravel.xsltsandbox.utils.LayoutUtil
 import ru.ravel.xsltsandbox.utils.XmlUtil
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.StringReader
 import java.io.StringWriter
@@ -47,14 +53,18 @@ import java.nio.file.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.IntFunction
 import java.util.regex.Pattern
+import javax.xml.parsers.DocumentBuilderFactory
 import javax.xml.parsers.SAXParserFactory
 import javax.xml.transform.ErrorListener
+import javax.xml.transform.OutputKeys
 import javax.xml.transform.TransformerException
 import javax.xml.transform.TransformerFactory
+import javax.xml.transform.dom.DOMSource
 import javax.xml.transform.sax.SAXSource
 import javax.xml.transform.stream.StreamResult
 import javax.xml.transform.stream.StreamSource
 import kotlin.io.path.absolutePathString
+import kotlin.io.path.exists
 
 
 class XmlXsltValidatorApp : Application() {
@@ -84,6 +94,7 @@ class XmlXsltValidatorApp : Application() {
 	private lateinit var fileTree: TreeView<Path>
 	private lateinit var xsltRadio: RadioButton
 	private lateinit var brRadio: RadioButton
+	private var processPath: Path? = null
 
 	@Volatile
 	private var suspendHighlighting = 0
@@ -139,6 +150,7 @@ class XmlXsltValidatorApp : Application() {
 					session.brBox?.isVisible = false
 					session.brBox?.isManaged = false
 				}
+
 				TransformMode.BR -> {
 					brRadio.isSelected = true
 					session.xsltBox?.isVisible = false
@@ -184,6 +196,7 @@ class XmlXsltValidatorApp : Application() {
 						item.toString().endsWith(".xsl", true) || item.toString().endsWith(".xslt", true) -> {
 							loadFileIntoAreaAsync(newSession, item, newSession.xsltArea) { loaded ->
 								newSession.xsltPath = loaded
+								newSession.mappingPropertyFile = loaded.parent.resolve("Properties.xml")
 								newSession.updateTabTitle()
 							}
 							newSession.mode = TransformMode.XSLT
@@ -192,7 +205,7 @@ class XmlXsltValidatorApp : Application() {
 
 						item.fileName.toString().equals("Properties.xml", true) -> {
 							val mapper = XmlMapper().registerKotlinModule()
-							val bizRule = mapper.readValue(item.toFile(), BizRuleActivityDefinition::class.java)
+							val bizRule = mapper.readValue(item.toFile(), BizRule::class.java)
 							val innerXml = StringEscapeUtils.unescapeXml(bizRule.xmlRule.value)
 
 							val rootNode: Any = if (innerXml.trim().startsWith("<Quantifier")) {
@@ -219,6 +232,7 @@ class XmlXsltValidatorApp : Application() {
 							newSession.mode = TransformMode.BR
 							brRadio.isSelected = true
 							newSession.brPath = item
+							newSession.mappingPropertyFile = item.parent.resolve("Properties.xml")
 							newSession.updateTabTitle()
 						}
 
@@ -231,7 +245,7 @@ class XmlXsltValidatorApp : Application() {
 		}
 		val chooseBtn = Button("Open…").apply {
 			setOnAction {
-				val initialDir = currentSession.processPath?.absolutePathString()?.let { File(it).parentFile }
+				val initialDir = processPath?.absolutePathString()?.let { File(it).parentFile }
 				val chooser = DirectoryChooser().apply {
 					title = "Выберите рабочую папку"
 					if (initialDir?.exists() == true) {
@@ -241,7 +255,8 @@ class XmlXsltValidatorApp : Application() {
 				val dir = chooser.showDialog(primaryStage) ?: return@setOnAction
 				dirField.text = dir.name
 				fileTree.root = buildFileTree(dir.toPath())
-				currentSession.processPath = dir.toPath()
+				processPath = dir.toPath()
+				saveConfig()
 			}
 		}
 		val fileTreeBox = VBox(
@@ -323,6 +338,7 @@ class XmlXsltValidatorApp : Application() {
 					.showOpenDialog(currentStage) ?: return@setOnAction
 				loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xsltArea) { path ->
 					currentSession.xsltPath = path
+					currentSession.mappingPropertyFile = path.parent.resolve("Properties.xml")
 					currentSession.updateTabTitle()
 				}
 			}
@@ -334,8 +350,9 @@ class XmlXsltValidatorApp : Application() {
 				val file = createChooser("Open BR…", currentSession.xsltPath, "XML Files (*.xml)", "*.xml")
 					.showOpenDialog(currentStage) ?: return@setOnAction
 				val mapper = XmlMapper().registerKotlinModule()
-				val bizRule = mapper.readValue(file, BizRuleActivityDefinition::class.java)
+				val bizRule = mapper.readValue(file, BizRule::class.java)
 				currentSession.brPath = file.toPath()
+				currentSession.mappingPropertyFile = file.toPath().parent.resolve("Properties.xml")
 				currentSession.updateTabTitle()
 				val innerXml = StringEscapeUtils.unescapeXml(bizRule.xmlRule.value)
 
@@ -432,6 +449,88 @@ class XmlXsltValidatorApp : Application() {
 		}
 		HBox.setMargin(disableHighlightCheck, Insets(0.0, 0.0, 0.0, 16.0))
 
+		val activitySeparator = Separator(Orientation.VERTICAL)
+		val activityLabel = Label("Activities debuger:")
+		val prevActivityBtn = Button().apply {
+			graphic = FontIcon(FontAwesomeSolid.ARROW_LEFT)
+			tooltip = Tooltip("Previous layout activity")
+			setOnAction { goToPreviousActivity() }
+		}
+		val nextActivityBtn = Button().apply {
+			graphic = FontIcon(FontAwesomeSolid.ARROW_RIGHT)
+			tooltip = Tooltip("Next layout activity")
+			setOnAction { goToNextActivity() }
+		}
+		val dataDocsActivityBtn = MenuButton().apply {
+			graphic = FontIcon(FontAwesomeSolid.FILE_CODE)
+			tooltip = Tooltip("Open DataDocs")
+
+			val manualItem = MenuItem("Ввести вручную").apply {
+				setOnAction {
+					val dlg = Stage().apply {
+						initOwner(currentStage)
+						initModality(Modality.WINDOW_MODAL)
+						title = "DataDocs Editor"
+					}
+					val area = createHighlightingCodeArea(false).apply {
+						prefWidth = 600.0
+						prefHeight = 400.0
+						replaceText(currentSession.dataDocs ?: "")
+					}
+					val okBtn = Button("OK").apply {
+						setOnAction {
+							currentSession.dataDocs = area.text
+							val properties = currentSession.mappingPropertyFile?.toFile()
+							if (properties != null) {
+								val dataDocs = getDataDocsInOut(properties)
+									.filter { it.access in arrayOf("Input", "InOut") }
+									.map { it.referenceName }
+								val neededDataDocs = extractNeededDataDocs(currentSession.dataDocs!!, dataDocs)
+								currentSession.xmlArea.replaceText(neededDataDocs)
+							}
+							dlg.close()
+						}
+					}
+					dlg.scene = Scene(VBox(8.0, area, okBtn).apply { padding = Insets(10.0) })
+					dlg.show()
+				}
+			}
+
+			val fileItem = MenuItem("Выбрать файл").apply {
+				setOnAction {
+					val file = createChooser(
+						"Open DataDocs",
+						null,
+						"XML/JSON Files (*.xml)",
+						"*.xml"
+					).showOpenDialog(currentStage) ?: return@setOnAction
+					currentSession.dataDocs = XmlUtil.readXmlSafe(file)
+					val properties = currentSession.mappingPropertyFile?.toFile()
+					if (properties != null) {
+						val dataDocs = getDataDocsInOut(properties)
+							.filter { it.access in arrayOf("Input", "InOut") }
+							.map { it.referenceName }
+						val neededDataDocs = extractNeededDataDocs(currentSession.dataDocs!!, dataDocs)
+						currentSession.xmlArea.replaceText(neededDataDocs)
+					}
+				}
+			}
+
+			items.addAll(manualItem, fileItem)
+		}
+
+		fun updateActivityButtons() {
+			val xsltLoaded = currentSession.xsltPath != null
+			val brLoaded = currentSession.brRoot != null || currentSession.brRootQuant != null
+			prevActivityBtn.isDisable = !(xsltLoaded || brLoaded)
+			nextActivityBtn.isDisable = !(xsltLoaded || brLoaded)
+		}
+
+		updateActivityButtons()
+		modeGroup.selectedToggleProperty().addListener { _, _, _ ->
+			updateActivityButtons()
+		}
+
 		return HBox(
 			8.0,
 			validateAntTransformBtn,
@@ -442,7 +541,12 @@ class XmlXsltValidatorApp : Application() {
 			openStack,
 			saveStack,
 			openXmlBtn,
-			disableHighlightCheck
+			disableHighlightCheck,
+			activitySeparator,
+			activityLabel,
+			prevActivityBtn,
+			nextActivityBtn,
+			dataDocsActivityBtn,
 		).apply {
 			alignment = Pos.CENTER_LEFT
 			padding = Insets(10.0)
@@ -797,7 +901,7 @@ class XmlXsltValidatorApp : Application() {
 					xml = s.xmlPath?.toString(),
 					xslt = s.xsltPath?.toString(),
 					br = s.brPath?.toString(),
-					process = s.processPath?.toString(),
+					process = processPath?.toString(),
 				)
 			}
 			val activeIndex = workTabs.indexOf(tabPane.selectionModel.selectedItem).coerceAtLeast(0)
@@ -891,13 +995,13 @@ class XmlXsltValidatorApp : Application() {
 		state.xml?.let { p ->
 			val path = Paths.get(p)
 			if (Files.exists(path)) {
-				loadFileIntoArea(session, path, session.xmlArea) { session.xmlPath = it }
+				loadFileIntoAreaAsync(session, path, session.xmlArea) { session.xmlPath = it }
 			}
 		}
 		state.xslt?.let { p ->
 			val path = Paths.get(p)
 			if (Files.exists(path)) {
-				loadFileIntoArea(session, path, session.xsltArea) { loaded ->
+				loadFileIntoAreaAsync(session, path, session.xsltArea) { loaded ->
 					session.xsltPath = loaded
 					session.updateTabTitle()
 				}
@@ -907,7 +1011,7 @@ class XmlXsltValidatorApp : Application() {
 			val path = Paths.get(p)
 			if (Files.exists(path)) {
 				val mapper = XmlMapper().registerKotlinModule()
-				val bizRule = mapper.readValue(path.toFile(), BizRuleActivityDefinition::class.java)
+				val bizRule = mapper.readValue(path.toFile(), BizRule::class.java)
 				val innerXml = StringEscapeUtils.unescapeXml(bizRule.xmlRule.value)
 				val rootNode: Any = if (innerXml.trim().startsWith("<Quantifier")) {
 					mapper.readValue(innerXml, Quantifier::class.java)
@@ -932,7 +1036,7 @@ class XmlXsltValidatorApp : Application() {
 		state.process?.let { p ->
 			val procPath = Paths.get(p)
 			if (Files.isDirectory(procPath)) {
-				session.processPath = procPath
+				processPath = procPath
 				Platform.runLater {
 					dirField.text = procPath.toAbsolutePath().toString()
 					fileTree.root = buildFileTree(procPath)
@@ -981,34 +1085,42 @@ class XmlXsltValidatorApp : Application() {
 	/**
 	 * Performs XML well-formed check, XSLT compilation & transformation
 	 */
-	private fun doTransform(owner: Stage) {
+	private fun doTransform(owner: Stage): String {
 		val s = currentSession
 
 		when (s.mode) {
 			TransformMode.BR -> {
-				val xml = currentSession.xmlArea.text
-				val br = currentSession.brRoot ?: currentSession.brRootQuant
-				val result = when (br) {
-					is Connective -> {
-						evaluateBR(xml, br)
-					}
+				try {
+					val xml = currentSession.xmlArea.text
+					val br = currentSession.brRoot ?: currentSession.brRootQuant
+					val result = when (br) {
+						is Connective -> {
+							evaluateBR(xml, br)
+						}
 
-					is Quantifier -> {
-						val proc = Processor(false)
-						val doc = buildDocForXPath(proc, xml)
-						val compiler = proc.newXPathCompiler()
-						setDefaultNsFromDoc(compiler, doc)
-						evalQuantifier(br, compiler, doc)
-					}
+						is Quantifier -> {
+							val proc = Processor(false)
+							val doc = buildDocForXPath(proc, xml)
+							val compiler = proc.newXPathCompiler()
+							setDefaultNsFromDoc(compiler, doc)
+							evalQuantifier(br, compiler, doc)
+						}
 
-					else -> false
-				}
-				Platform.runLater {
-					s.resultArea.replaceText(result.toString())
-					highlightAllMatches(s.resultArea, currentQuery, true)
-					s.nanCountLabel.text = ""
-					s.nanCountLabel.isVisible = false
-					showStatus(owner, result.toString())
+						else -> false
+					}
+					Platform.runLater {
+						s.resultArea.replaceText(result.toString())
+						highlightAllMatches(s.resultArea, currentQuery, true)
+						s.nanCountLabel.text = ""
+						s.nanCountLabel.isVisible = false
+						showStatus(owner, result.toString())
+					}
+					return result.toString()
+				} catch (e: Exception) {
+					Platform.runLater {
+						showStatus(owner, e.localizedMessage)
+					}
+					throw e
 				}
 			}
 
@@ -1108,7 +1220,7 @@ class XmlXsltValidatorApp : Application() {
 						redrawXsltOverlay(s)
 						showStatus(owner, status.toString())
 					}
-					return
+					throw ex
 				}
 
 				val writer = StringWriter()
@@ -1123,8 +1235,8 @@ class XmlXsltValidatorApp : Application() {
 					System.err.println(ex.message)
 				}
 
+				val resultText = writer.toString()
 				Platform.runLater {
-					val resultText = writer.toString()
 					s.resultArea.replaceText(resultText)
 					highlightAllMatches(s.resultArea, currentQuery, true)
 					val nanCount = Regex("\\bNaN\\b").findAll(resultText).count()
@@ -1143,6 +1255,7 @@ class XmlXsltValidatorApp : Application() {
 					showStatus(owner, status.toString())
 					appendBadSelectWarnings(s, status)
 				}
+				return resultText
 			}
 		}
 	}
@@ -2225,17 +2338,15 @@ class XmlXsltValidatorApp : Application() {
 
 
 	private fun DocSession.updateTabTitle() {
-		val xsltName = xsltPath?.fileName?.toString()
-		val brName = brPath?.fileName?.toString()
 		when {
-			(xsltName != null) -> {
-				tab.text = xsltName
-				tab.tooltip = Tooltip(xsltPath.toString())
+			(xsltPath != null) -> {
+				tab.text = "${xsltPath?.parent?.fileName} / ${xsltPath?.fileName}"
+				tab.tooltip = Tooltip(xsltPath?.absolutePathString())
 			}
 
-			(brName != null) -> {
-				tab.text = brName
-				tab.tooltip = Tooltip(brPath.toString())
+			(brPath != null) -> {
+				tab.text = "${brPath?.parent?.fileName} / ${brPath?.fileName}"
+				tab.tooltip = Tooltip(brPath?.absolutePathString())
 			}
 		}
 	}
@@ -2278,29 +2389,39 @@ class XmlXsltValidatorApp : Application() {
 
 	// ───────────────── BR → TreeView ─────────────────
 	private fun toTreeItem(node: Any): TreeItem<String> = when (node) {
-		is Connective -> TreeItem(kindOf(node.type)).apply {
-			node.predicates?.forEach { children.add(toTreeItem(it)) }
-			node.quantifiers?.forEach { children.add(toTreeItem(it)) }
-			node.connectives?.forEach { children.add(toTreeItem(it)) }
+		is Connective -> {
+			TreeItem(kindOf(node.type)).apply {
+				node.predicates?.forEach { children.add(toTreeItem(it)) }
+				node.quantifiers?.forEach { children.add(toTreeItem(it)) }
+				node.connectives?.forEach { children.add(toTreeItem(it)) }
+			}
 		}
 
-		is Quantifier -> TreeItem(kindOf(node.type)).apply {
-			node.variableDefinition?.let { children.add(toTreeItem(it)) }
-			node.predicates?.forEach { children.add(toTreeItem(it)) }
-			node.quantifiers?.forEach { children.add(toTreeItem(it)) }
-			node.connectives?.forEach { children.add(toTreeItem(it)) }
+		is Quantifier -> {
+			TreeItem(kindOf(node.type)).apply {
+				node.variableDefinition?.let { children.add(toTreeItem(it)) }
+				node.predicates?.forEach { children.add(toTreeItem(it)) }
+				node.quantifiers?.forEach { children.add(toTreeItem(it)) }
+				node.connectives?.forEach { children.add(toTreeItem(it)) }
+			}
 		}
 
-		is Predicate -> TreeItem(kindOf(node.type)).apply {
-			node.variables.forEach { v -> v.value.let { children.add(TreeItem(it)) } }
-			node.constant?.value?.let { children.add(TreeItem(it)) }
+		is Predicate -> {
+			TreeItem(kindOf(node.type)).apply {
+				node.variables.forEach { v -> v.value.let { children.add(TreeItem(it)) } }
+				node.constant?.value?.let { children.add(TreeItem(it)) }
+			}
 		}
 
-		is VariableDefinition -> TreeItem(node.name).apply {
-			node.xpath?.value?.let { children.add(TreeItem(it)) }
+		is VariableDefinition -> {
+			TreeItem(node.name).apply {
+				node.xpath?.value?.let { children.add(TreeItem(it)) }
+			}
 		}
 
-		else -> TreeItem(node.toString())
+		else -> {
+			TreeItem(node.toString())
+		}
 	}
 
 
@@ -2381,7 +2502,9 @@ class XmlXsltValidatorApp : Application() {
 				}
 			}
 
-			else -> false
+			else -> {
+				false
+			}
 		}
 	}
 
@@ -2419,6 +2542,10 @@ class XmlXsltValidatorApp : Application() {
 				values.isEmpty() || values.none { okFor(it) }
 			}
 
+			"exactlyone" -> {
+				values.size == 1 && okFor(values[0])
+			}
+
 			else -> false
 		}
 	}
@@ -2452,7 +2579,6 @@ class XmlXsltValidatorApp : Application() {
 			.toMap()
 
 		val predicatesOk = predicates.all { evalPredicate(it, compiler, doc, vmap) }
-//		if (!predicatesOk) return false
 		return when (kindOf(c.type)) {
 			"and" -> {
 				connectives.all { evalConnective(it, compiler, doc) } && quantifiers.all { evalQuantifier(it, compiler, doc) }
@@ -2475,9 +2601,262 @@ class XmlXsltValidatorApp : Application() {
 			}
 
 			else -> {
-				println("evalConnective - case else:\n$predicates\n$quantifiers\n$connectives")
+				System.err.println("evalConnective - case else:\n$predicates\n$quantifiers\n$connectives")
 				predicatesOk
 			}
+		}
+	}
+
+
+	private fun goToPreviousActivity() {
+		getActivities(ActivityDirection.PREVIOUS)
+	}
+
+
+	private fun goToNextActivity() {
+		getActivities(ActivityDirection.NEXT)
+	}
+
+
+	private fun getActivities(activityDirection: ActivityDirection) {
+		val selectedActivity = when (currentSession.mode) {
+			TransformMode.XSLT -> currentSession.xsltPath
+			TransformMode.BR -> currentSession.brPath
+		} ?: return
+
+		val result = doTransform(currentStage)
+
+		val brResult = if (currentSession.mode == TransformMode.BR) {
+			result
+		} else {
+			null
+		}
+
+		val layoutUtil = LayoutUtil(currentSession)
+		val nextActivity = layoutUtil.getActivityByDirection(selectedActivity, activityDirection, brRadio.isSelected, brResult)
+			?: return
+
+		val nextActivityDir = selectedActivity.parent?.parent?.resolve(nextActivity)
+		val nextActivityPropertiesPath = nextActivityDir?.resolve("Properties.xml")
+			?: return
+
+		val dataDocsOutputs = getDataDocsInOut(nextActivityPropertiesPath.toFile())
+			.filter { it.access in arrayOf("InOut") }
+			.map { it.referenceName }
+		if (currentSession.mode == TransformMode.XSLT) {
+			currentSession.dataDocs = replaceDataDocsInString(currentSession.dataDocs!!, result, dataDocsOutputs)
+		}
+		val nextActivityDataDocsInputs = getDataDocsInOut(nextActivityPropertiesPath.toFile())
+			.filter { it.access in arrayOf("Input", "InOut") }
+			.map { it.referenceName }
+		val neededDataDocs = extractNeededDataDocs(currentSession.dataDocs!!, nextActivityDataDocsInputs)
+		currentSession.xmlArea.replaceText(neededDataDocs)
+
+		if (nextActivityPropertiesPath.exists()) {
+			val nextActivityType = LayoutUtil.getActivityType(nextActivityPropertiesPath.toFile())
+			when (nextActivityType) {
+				ActivityType.BIZ_RULE -> {
+					val state = TabState(
+						xml = null,
+						xslt = null,
+						br = nextActivityPropertiesPath.absolutePathString(),
+						process = null
+					)
+					loadTabStateIntoSession(currentSession, state)
+					currentSession.xsltPath = null
+					currentSession.updateTabTitle()
+					brRadio.isSelected = true
+				}
+
+				ActivityType.DATA_MAPPING -> {
+					val xsltFile = nextActivityDir.resolve("Mapping.xslt")
+					val state = TabState(
+						xml = null,
+						xslt = xsltFile.absolutePathString(),
+						br = null,
+						process = null
+					)
+					loadTabStateIntoSession(currentSession, state)
+					currentSession.brPath = null
+					currentSession.updateTabTitle()
+					xsltRadio.isSelected = true
+				}
+
+				ActivityType.DATA_SOURCE -> {
+					val xsltFile = nextActivityDir.resolve("MappingInput.xslt")
+					val state = TabState(
+						xml = null,
+						xslt = xsltFile.absolutePathString(),
+						br = null,
+						process = null
+					)
+					loadTabStateIntoSession(currentSession, state)
+					currentSession.brPath = null
+					currentSession.updateTabTitle()
+					xsltRadio.isSelected = true
+				}
+
+				ActivityType.SEGMENTATION_TREE -> {
+				}
+
+				ActivityType.SET_VALUE -> {
+				}
+
+				ActivityType.PROCEDURE_CALL -> {
+				}
+
+				ActivityType.PROCEDURE_RETURN -> {
+				}
+
+				ActivityType.END_PROCEDURE -> {
+				}
+
+				else -> {}
+			}
+		}
+	}
+
+
+	private fun getDataDocsInOut(propertyFile: File): List<ReferredDocument> {
+		val mapper = XmlMapper().registerKotlinModule()
+
+		val type = LayoutUtil.getActivityType(propertyFile)
+		when (type) {
+			ActivityType.BIZ_RULE -> {
+				return mapper.readValue(propertyFile, BizRule::class.java).referredDocuments.documents
+					.map { ReferredDocument(it.referenceName, it.access) }
+			}
+
+			ActivityType.DATA_MAPPING -> {
+				return mapper.readValue(propertyFile, DataMapping::class.java).referredDocuments?.items
+					?.map { ReferredDocument(it.referenceName, it.access) }
+					?: emptyList()
+			}
+
+			ActivityType.DATA_SOURCE -> {
+				return mapper.readValue(propertyFile, DataSource::class.java).referredDocuments?.referredDocuments
+					?.map { ReferredDocument(it.referenceName!!, it.access!!) }
+					?: emptyList()
+			}
+
+			ActivityType.SEGMENTATION_TREE -> {
+			}
+
+			ActivityType.SET_VALUE -> {
+			}
+
+			ActivityType.PROCEDURE_RETURN -> {
+			}
+
+			ActivityType.END_PROCEDURE -> {
+			}
+
+			else -> {}
+		}
+		return emptyList()
+	}
+
+
+	/**
+	 * Собирает <Data> только из указанных датадоков, в порядке wantedDocs.
+	 *
+	 * @param xmlContent исходный XML как строка
+	 * @param wantedDocs список требуемых имен узлов (например ["ApplicationData","DocumentCodebook"])
+	 * @param createEmptyIfMissing если true — добавит пустой узел, когда нужный не найден в исходнике
+	 */
+	private fun extractNeededDataDocs(
+		xmlContent: String,
+		wantedDocs: List<String>,
+		createEmptyIfMissing: Boolean = false,
+	): String {
+		val dbf = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+		val srcDoc = dbf.newDocumentBuilder()
+			.parse(ByteArrayInputStream(xmlContent.toByteArray(Charsets.UTF_8)))
+		srcDoc.documentElement.normalize()
+
+		val destDoc = dbf.newDocumentBuilder().newDocument()
+		val outRoot = destDoc.createElement("Data")
+		destDoc.appendChild(outRoot)
+
+		val srcRoot = srcDoc.documentElement
+		val children = srcRoot.childNodes
+
+		// сохраняем порядок, заданный списком wantedDocs
+		for (wanted in wantedDocs) {
+			var found = false
+			for (i in 0 until children.length) {
+				val n = children.item(i)
+				if (n.nodeType == Element.ELEMENT_NODE) {
+					val name = (n as Element).localName ?: n.nodeName
+					if (name == wanted) {
+						outRoot.appendChild(destDoc.importNode(n, true))
+						found = true
+					}
+				}
+			}
+			if (!found && createEmptyIfMissing) {
+				outRoot.appendChild(destDoc.createElement(wanted))
+			}
+		}
+
+		val tf = TransformerFactory.newInstance().newTransformer().apply {
+			setOutputProperty(OutputKeys.INDENT, "yes")
+			setOutputProperty(OutputKeys.ENCODING, "UTF-8")
+		}
+		return StringWriter().use { w ->
+			tf.transform(DOMSource(destDoc), StreamResult(w))
+			w.toString()
+		}
+	}
+
+
+	private fun replaceDataDocsInString(
+		xmlContent: String,
+		newDataDocsXml: String,
+		wantedDocs: List<String>,
+	): String {
+		val dbf = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+
+		// Исходный документ
+		val srcDoc = dbf.newDocumentBuilder()
+			.parse(ByteArrayInputStream(xmlContent.toByteArray(Charsets.UTF_8)))
+		srcDoc.documentElement.normalize()
+		val srcRoot = srcDoc.documentElement
+
+		// Новые датадоки
+		val newDoc = dbf.newDocumentBuilder()
+			.parse(ByteArrayInputStream(newDataDocsXml.toByteArray(Charsets.UTF_8)))
+		newDoc.documentElement.normalize()
+		val newRoot = newDoc.documentElement
+
+		// Удаляем в исходнике только те датадоки, которые указаны
+		val toRemove = mutableListOf<org.w3c.dom.Node>()
+		val children = srcRoot.childNodes
+		for (i in 0 until children.length) {
+			val n = children.item(i)
+			if (n.nodeType == org.w3c.dom.Node.ELEMENT_NODE && wantedDocs.contains(n.nodeName)) {
+				toRemove.add(n)
+			}
+		}
+		toRemove.forEach { srcRoot.removeChild(it) }
+
+		// Из нового документа берём только нужные датадоки и вставляем в исходный
+		val newChildren = newRoot.childNodes
+		for (i in 0 until newChildren.length) {
+			val n = newChildren.item(i)
+			if (n.nodeType == org.w3c.dom.Node.ELEMENT_NODE && wantedDocs.contains(n.nodeName)) {
+				srcRoot.appendChild(srcDoc.importNode(n, true))
+			}
+		}
+
+		// В строку
+		val transformer = TransformerFactory.newInstance().newTransformer().apply {
+			setOutputProperty(OutputKeys.INDENT, "yes")
+			setOutputProperty(OutputKeys.ENCODING, "UTF-8")
+		}
+		return StringWriter().use { w ->
+			transformer.transform(DOMSource(srcDoc), StreamResult(w))
+			w.toString()
 		}
 	}
 

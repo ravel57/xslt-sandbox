@@ -18,5 +18,9 @@ module ru.ravel.xsltsandbox {
 
 	opens ru.ravel.xsltsandbox.models to com.fasterxml.jackson.databind, com.fasterxml.jackson.module.kotlin, kotlin.reflect;
 	opens ru.ravel.xsltsandbox.models.bizrule to com.fasterxml.jackson.databind, com.fasterxml.jackson.module.kotlin, kotlin.reflect;
+	opens ru.ravel.xsltsandbox.models.procedure to com.fasterxml.jackson.databind, com.fasterxml.jackson.module.kotlin, kotlin.reflect;
+	opens ru.ravel.xsltsandbox.models.layout to com.fasterxml.jackson.databind, com.fasterxml.jackson.module.kotlin, kotlin.reflect;
+	opens ru.ravel.xsltsandbox.models.datamapping to com.fasterxml.jackson.databind, com.fasterxml.jackson.module.kotlin, kotlin.reflect;
+	opens ru.ravel.xsltsandbox.models.datasource to com.fasterxml.jackson.databind, com.fasterxml.jackson.module.kotlin, kotlin.reflect;
 	exports ru.ravel.xsltsandbox;
 }

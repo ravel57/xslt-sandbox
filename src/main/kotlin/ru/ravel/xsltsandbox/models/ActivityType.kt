@@ -1,0 +1,18 @@
+package ru.ravel.xsltsandbox.models
+
+enum class ActivityType {
+	FORM,
+	BIZ_RULE,
+	SEGMENTATION_TREE,
+	DATA_SOURCE,
+	DATA_MAPPING,
+	SET_VALUE,
+	PROCEDURE_CALL,
+	DISPATCH,
+	WAIT,
+	PROCEDURE_RETURN,
+	END_PROCEDURE,
+	SEND_EMAIL,
+	SET_PHASE,
+	UNKNOWN,
+}
