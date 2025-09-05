@@ -14,5 +14,6 @@ enum class ActivityType {
 	END_PROCEDURE,
 	SEND_EMAIL,
 	SET_PHASE,
+	BUSINESS_RULE,
 	UNKNOWN,
 }

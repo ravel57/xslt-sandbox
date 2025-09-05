@@ -7,6 +7,7 @@ import javafx.animation.AnimationTimer
 import javafx.application.Application
 import javafx.application.Platform
 import javafx.concurrent.Task
+import javafx.event.ActionEvent
 import javafx.geometry.Insets
 import javafx.geometry.Orientation
 import javafx.geometry.Pos
@@ -34,6 +35,7 @@ import org.fxmisc.richtext.model.TwoDimensional
 import org.fxmisc.richtext.model.TwoDimensional.Bias.Forward
 import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid
 import org.kordamp.ikonli.javafx.FontIcon
+import org.w3c.dom.Document
 import org.w3c.dom.Element
 import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
@@ -43,6 +45,11 @@ import ru.ravel.xsltsandbox.models.ReferredDocument
 import ru.ravel.xsltsandbox.models.bizrule.*
 import ru.ravel.xsltsandbox.models.datamapping.DataMapping
 import ru.ravel.xsltsandbox.models.datasource.DataSource
+import ru.ravel.xsltsandbox.models.layout.DiagramLayout
+import ru.ravel.xsltsandbox.models.procedure.ProcedureCall
+import ru.ravel.xsltsandbox.models.segmentationtree.BusinessRule
+import ru.ravel.xsltsandbox.models.segmentationtree.SegmentationTree
+import ru.ravel.xsltsandbox.models.setvalue.SetValueActivity
 import ru.ravel.xsltsandbox.utils.LayoutUtil
 import ru.ravel.xsltsandbox.utils.XmlUtil
 import java.io.ByteArrayInputStream
@@ -50,6 +57,7 @@ import java.io.File
 import java.io.StringReader
 import java.io.StringWriter
 import java.nio.file.*
+import java.util.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.function.IntFunction
 import java.util.regex.Pattern
@@ -63,11 +71,16 @@ import javax.xml.transform.dom.DOMSource
 import javax.xml.transform.sax.SAXSource
 import javax.xml.transform.stream.StreamResult
 import javax.xml.transform.stream.StreamSource
+import javax.xml.xpath.XPathConstants
+import javax.xml.xpath.XPathFactory
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.exists
+import kotlin.io.path.extension
+import org.w3c.dom.Node as DomNode
 
 
 class XmlXsltValidatorApp : Application() {
+	private val xmlMapper = XmlMapper().registerKotlinModule()
 
 	private lateinit var tabPane: TabPane
 	private val sessions = mutableMapOf<Tab, DocSession>()
@@ -95,6 +108,8 @@ class XmlXsltValidatorApp : Application() {
 	private lateinit var xsltRadio: RadioButton
 	private lateinit var brRadio: RadioButton
 	private var processPath: Path? = null
+	private val activitiesDebugDataStack = mutableMapOf<DocSession, Stack<String?>>()
+	private val activitiesDebugProcedureStack = mutableMapOf<DocSession, Stack<String?>>()
 
 	@Volatile
 	private var suspendHighlighting = 0
@@ -121,7 +136,6 @@ class XmlXsltValidatorApp : Application() {
 		}
 		super.stop()
 	}
-
 
 	override fun start(primaryStage: Stage) {
 		currentStage = primaryStage
@@ -158,6 +172,10 @@ class XmlXsltValidatorApp : Application() {
 					session.brBox?.isVisible = true
 					session.brBox?.isManaged = true
 				}
+
+				else -> {
+					TODO()
+				}
 			}
 		}
 
@@ -192,8 +210,10 @@ class XmlXsltValidatorApp : Application() {
 					tabPane.tabs.add(tabPane.tabs.size - 1, newSession.tab)
 					tabPane.selectionModel.select(newSession.tab)
 
+					val type = LayoutUtil.getActivityType(item.toFile())
+					val isBr = type in arrayOf(ActivityType.BIZ_RULE, ActivityType.BUSINESS_RULE)
 					when {
-						item.toString().endsWith(".xsl", true) || item.toString().endsWith(".xslt", true) -> {
+						item.extension.lowercase() in arrayOf("xsl", "xslt") -> {
 							loadFileIntoAreaAsync(newSession, item, newSession.xsltArea) { loaded ->
 								newSession.xsltPath = loaded
 								newSession.mappingPropertyFile = loaded.parent.resolve("Properties.xml")
@@ -203,11 +223,21 @@ class XmlXsltValidatorApp : Application() {
 							xsltRadio.isSelected = true
 						}
 
-						item.fileName.toString().equals("Properties.xml", true) -> {
-							val mapper = XmlMapper().registerKotlinModule()
-							val bizRule = mapper.readValue(item.toFile(), BizRule::class.java)
-							val innerXml = StringEscapeUtils.unescapeXml(bizRule.xmlRule.value)
+						item.extension.equals("xml", true) && isBr -> {
+							val mapper = xmlMapper
+							val innerXml = when (type) {
+								ActivityType.BIZ_RULE -> {
+									val bizRule = mapper.readValue(item.toFile(), BizRule::class.java)
+									StringEscapeUtils.unescapeXml(bizRule.xmlRule.value)
+								}
 
+								ActivityType.BUSINESS_RULE -> {
+									val businessRule = mapper.readValue(item.toFile(), BusinessRule::class.java)
+									StringEscapeUtils.unescapeXml(businessRule.xmlRule)
+								}
+
+								else -> return@setOnMouseClicked
+							}
 							val rootNode: Any = if (innerXml.trim().startsWith("<Quantifier")) {
 								mapper.readValue(innerXml, Quantifier::class.java)
 							} else {
@@ -349,7 +379,7 @@ class XmlXsltValidatorApp : Application() {
 			setOnAction {
 				val file = createChooser("Open BR…", currentSession.xsltPath, "XML Files (*.xml)", "*.xml")
 					.showOpenDialog(currentStage) ?: return@setOnAction
-				val mapper = XmlMapper().registerKotlinModule()
+				val mapper = xmlMapper
 				val bizRule = mapper.readValue(file, BizRule::class.java)
 				currentSession.brPath = file.toPath()
 				currentSession.mappingPropertyFile = file.toPath().parent.resolve("Properties.xml")
@@ -450,7 +480,7 @@ class XmlXsltValidatorApp : Application() {
 		HBox.setMargin(disableHighlightCheck, Insets(0.0, 0.0, 0.0, 16.0))
 
 		val activitySeparator = Separator(Orientation.VERTICAL)
-		val activityLabel = Label("Activities debuger:")
+		val activityLabel = Label("Activities debugger:")
 		val prevActivityBtn = Button().apply {
 			graphic = FontIcon(FontAwesomeSolid.ARROW_LEFT)
 			tooltip = Tooltip("Previous layout activity")
@@ -465,7 +495,7 @@ class XmlXsltValidatorApp : Application() {
 			graphic = FontIcon(FontAwesomeSolid.FILE_CODE)
 			tooltip = Tooltip("Open DataDocs")
 
-			val manualItem = MenuItem("Ввести вручную").apply {
+			val manualItem = MenuItem("Inout text").apply {
 				setOnAction {
 					val dlg = Stage().apply {
 						initOwner(currentStage)
@@ -496,7 +526,7 @@ class XmlXsltValidatorApp : Application() {
 				}
 			}
 
-			val fileItem = MenuItem("Выбрать файл").apply {
+			val fileItem = MenuItem("Select file").apply {
 				setOnAction {
 					val file = createChooser(
 						"Open DataDocs",
@@ -524,6 +554,12 @@ class XmlXsltValidatorApp : Application() {
 			val brLoaded = currentSession.brRoot != null || currentSession.brRootQuant != null
 			prevActivityBtn.isDisable = !(xsltLoaded || brLoaded)
 			nextActivityBtn.isDisable = !(xsltLoaded || brLoaded)
+		}
+
+		dataDocsActivityBtn.items.forEach { item ->
+			item.addEventHandler(ActionEvent.ACTION) {
+				updateActivityButtons()
+			}
 		}
 
 		updateActivityButtons()
@@ -1010,7 +1046,7 @@ class XmlXsltValidatorApp : Application() {
 		state.br?.let { p ->
 			val path = Paths.get(p)
 			if (Files.exists(path)) {
-				val mapper = XmlMapper().registerKotlinModule()
+				val mapper = xmlMapper
 				val bizRule = mapper.readValue(path.toFile(), BizRule::class.java)
 				val innerXml = StringEscapeUtils.unescapeXml(bizRule.xmlRule.value)
 				val rootNode: Any = if (innerXml.trim().startsWith("<Quantifier")) {
@@ -1020,11 +1056,15 @@ class XmlXsltValidatorApp : Application() {
 				}
 				when (rootNode) {
 					is Quantifier -> {
-						session.brRootQuant = rootNode; session.brRoot = null; session.brTree?.root = toTreeItem(rootNode)
+						session.brRootQuant = rootNode
+						session.brRoot = null
+						session.brTree?.root = toTreeItem(rootNode)
 					}
 
 					is Connective -> {
-						session.brRoot = rootNode; session.brRootQuant = null; session.brTree?.root = toTreeItem(rootNode)
+						session.brRoot = rootNode
+						session.brRootQuant = null
+						session.brTree?.root = toTreeItem(rootNode)
 					}
 				}
 				session.brTree?.isShowRoot = true
@@ -1084,6 +1124,9 @@ class XmlXsltValidatorApp : Application() {
 
 	/**
 	 * Performs XML well-formed check, XSLT compilation & transformation
+	 *
+	 * 	Работает с [currentSession]
+	 *
 	 */
 	private fun doTransform(owner: Stage): String {
 		val s = currentSession
@@ -1232,7 +1275,7 @@ class XmlXsltValidatorApp : Application() {
 						StreamResult(writer)
 					)
 				} catch (ex: TransformerException) {
-					System.err.println(ex.message)
+					System.err.println(ex.localizedMessage)
 				}
 
 				val resultText = writer.toString()
@@ -1256,6 +1299,75 @@ class XmlXsltValidatorApp : Application() {
 					appendBadSelectWarnings(s, status)
 				}
 				return resultText
+			}
+
+			TransformMode.ST -> {
+				try {
+					val xml = currentSession.xmlArea.text
+					val path = currentSession.otherActivityPath
+					val st = xmlMapper.readValue(path?.toFile(), SegmentationTree::class.java)
+					val results = st.rules?.ruleList?.mapNotNull { rule ->
+						val file = path?.parent?.parent?.parent?.parent?.resolve("BusinessRules")?.resolve("${rule.ruleID}.xml")
+							?.toFile()
+						if (file?.exists() == true) {
+							xmlMapper.readValue(file, BusinessRule::class.java)
+						} else {
+							null
+						}
+					}?.mapNotNull { rule ->
+						val rootNode: Any = if (rule.xmlRule?.trim()?.startsWith("<Quantifier") == true) {
+							xmlMapper.readValue(rule.xmlRule, Quantifier::class.java)
+						} else {
+							xmlMapper.readValue(rule.xmlRule, Connective::class.java)
+						}
+						val result = when (rootNode) {
+							is Connective -> {
+								evaluateBR(xml, rootNode)
+							}
+
+							is Quantifier -> {
+								val proc = Processor(false)
+								val doc = buildDocForXPath(proc, xml)
+								val compiler = proc.newXPathCompiler()
+								setDefaultNsFromDoc(compiler, doc)
+								evalQuantifier(rootNode, compiler, doc)
+							}
+
+							else -> false
+						}
+						if (result) {
+							rule.businessRuleID
+						} else {
+							null
+						}
+					}
+
+					return if (results?.isNotEmpty() == true) {
+						results.first()
+					} else {
+						"AllFalse"
+					}
+				} catch (e: Exception) {
+					Platform.runLater {
+						showStatus(owner, e.localizedMessage)
+					}
+					throw e
+				}
+			}
+
+			TransformMode.SV -> {
+				val propertyFile = currentSession.otherActivityPath?.toFile() ?: return ""
+
+				val nextActivityDataDocsInputs = getDataDocsInOut(propertyFile)
+					.filter { it.access in arrayOf("Input", "InOut") }
+					.map { it.referenceName }
+				val neededDataDocs = extractNeededDataDocs(currentSession.dataDocs!!, nextActivityDataDocsInputs)
+
+				return applySetValues(propertyFile, neededDataDocs)
+			}
+
+			TransformMode.OTHER -> {
+				return ""
 			}
 		}
 	}
@@ -2618,107 +2730,69 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
+	/**
+	 * Работает с [currentSession]
+	 */
 	private fun getActivities(activityDirection: ActivityDirection) {
-		val selectedActivity = when (currentSession.mode) {
+		val selectedActivityPath = when (currentSession.mode) {
 			TransformMode.XSLT -> currentSession.xsltPath
 			TransformMode.BR -> currentSession.brPath
+			TransformMode.ST,
+			TransformMode.SV,
+			TransformMode.OTHER,
+			-> currentSession.otherActivityPath
 		} ?: return
 
 		val result = doTransform(currentStage)
 
-		val brResult = if (currentSession.mode == TransformMode.BR) {
+		val exitName = if (currentSession.mode in arrayOf(TransformMode.BR, TransformMode.ST)) {
 			result
 		} else {
 			null
 		}
 
-		val layoutUtil = LayoutUtil(currentSession)
-		val nextActivity = layoutUtil.getActivityByDirection(selectedActivity, activityDirection, brRadio.isSelected, brResult)
-			?: return
+		val nextActivityName = LayoutUtil(currentSession).getActivityByDirection(
+			selectedActivityPath,
+			activityDirection,
+			currentSession.mode,
+			exitName
+		) ?: return
 
-		val nextActivityDir = selectedActivity.parent?.parent?.resolve(nextActivity)
+		val nextActivityDir = selectedActivityPath.parent?.parent?.resolve(nextActivityName)
 		val nextActivityPropertiesPath = nextActivityDir?.resolve("Properties.xml")
 			?: return
 
-		val dataDocsOutputs = getDataDocsInOut(nextActivityPropertiesPath.toFile())
-			.filter { it.access in arrayOf("InOut") }
-			.map { it.referenceName }
+		val nextActivityType = LayoutUtil.getActivityType(nextActivityPropertiesPath.toFile())
+
 		if (currentSession.mode == TransformMode.XSLT) {
-			currentSession.dataDocs = replaceDataDocsInString(currentSession.dataDocs!!, result, dataDocsOutputs)
-		}
-		val nextActivityDataDocsInputs = getDataDocsInOut(nextActivityPropertiesPath.toFile())
-			.filter { it.access in arrayOf("Input", "InOut") }
-			.map { it.referenceName }
-		val neededDataDocs = extractNeededDataDocs(currentSession.dataDocs!!, nextActivityDataDocsInputs)
-		currentSession.xmlArea.replaceText(neededDataDocs)
-
-		if (nextActivityPropertiesPath.exists()) {
-			val nextActivityType = LayoutUtil.getActivityType(nextActivityPropertiesPath.toFile())
+			val dataDocsOutputs = getDataDocsInOut(nextActivityPropertiesPath.toFile())
+				.filter { it.access in arrayOf("InOut") }
+				.map { it.referenceName }
 			when (nextActivityType) {
-				ActivityType.BIZ_RULE -> {
-					val state = TabState(
-						xml = null,
-						xslt = null,
-						br = nextActivityPropertiesPath.absolutePathString(),
-						process = null
-					)
-					loadTabStateIntoSession(currentSession, state)
-					currentSession.xsltPath = null
-					currentSession.updateTabTitle()
-					brRadio.isSelected = true
-				}
-
 				ActivityType.DATA_MAPPING -> {
-					val xsltFile = nextActivityDir.resolve("Mapping.xslt")
-					val state = TabState(
-						xml = null,
-						xslt = xsltFile.absolutePathString(),
-						br = null,
-						process = null
-					)
-					loadTabStateIntoSession(currentSession, state)
-					currentSession.brPath = null
-					currentSession.updateTabTitle()
-					xsltRadio.isSelected = true
+					currentSession.dataDocs = replaceDataDocsInString(currentSession.dataDocs!!, result, dataDocsOutputs)
 				}
 
 				ActivityType.DATA_SOURCE -> {
-					val xsltFile = nextActivityDir.resolve("MappingInput.xslt")
-					val state = TabState(
-						xml = null,
-						xslt = xsltFile.absolutePathString(),
-						br = null,
-						process = null
-					)
-					loadTabStateIntoSession(currentSession, state)
-					currentSession.brPath = null
-					currentSession.updateTabTitle()
-					xsltRadio.isSelected = true
-				}
-
-				ActivityType.SEGMENTATION_TREE -> {
-				}
-
-				ActivityType.SET_VALUE -> {
-				}
-
-				ActivityType.PROCEDURE_CALL -> {
-				}
-
-				ActivityType.PROCEDURE_RETURN -> {
-				}
-
-				ActivityType.END_PROCEDURE -> {
+					val mockResult = XmlUtil.readXmlSafe(nextActivityDir.resolve("mock.xml").toFile())
+					currentSession.dataDocs = replaceDataDocsInString(currentSession.dataDocs!!, mockResult, dataDocsOutputs)
 				}
 
 				else -> {}
 			}
 		}
+
+		processNextActivity(
+			nextActivityPropertiesPath,
+			nextActivityType,
+			nextActivityDir,
+			activityDirection,
+		)
 	}
 
 
 	private fun getDataDocsInOut(propertyFile: File): List<ReferredDocument> {
-		val mapper = XmlMapper().registerKotlinModule()
+		val mapper = xmlMapper
 
 		val type = LayoutUtil.getActivityType(propertyFile)
 		when (type) {
@@ -2739,21 +2813,16 @@ class XmlXsltValidatorApp : Application() {
 					?: emptyList()
 			}
 
-			ActivityType.SEGMENTATION_TREE -> {
-			}
-
 			ActivityType.SET_VALUE -> {
+				return mapper.readValue(propertyFile, SetValueActivity::class.java).referredDocuments?.documents
+					?.map { ReferredDocument(it.referenceName!!, it.access!!) }
+					?: emptyList()
 			}
 
-			ActivityType.PROCEDURE_RETURN -> {
+			else -> {
+				return emptyList()
 			}
-
-			ActivityType.END_PROCEDURE -> {
-			}
-
-			else -> {}
 		}
-		return emptyList()
 	}
 
 
@@ -2816,39 +2885,34 @@ class XmlXsltValidatorApp : Application() {
 		wantedDocs: List<String>,
 	): String {
 		val dbf = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
-
 		// Исходный документ
 		val srcDoc = dbf.newDocumentBuilder()
 			.parse(ByteArrayInputStream(xmlContent.toByteArray(Charsets.UTF_8)))
 		srcDoc.documentElement.normalize()
 		val srcRoot = srcDoc.documentElement
-
 		// Новые датадоки
 		val newDoc = dbf.newDocumentBuilder()
 			.parse(ByteArrayInputStream(newDataDocsXml.toByteArray(Charsets.UTF_8)))
 		newDoc.documentElement.normalize()
 		val newRoot = newDoc.documentElement
-
 		// Удаляем в исходнике только те датадоки, которые указаны
-		val toRemove = mutableListOf<org.w3c.dom.Node>()
+		val toRemove = mutableListOf<DomNode>()
 		val children = srcRoot.childNodes
 		for (i in 0 until children.length) {
 			val n = children.item(i)
-			if (n.nodeType == org.w3c.dom.Node.ELEMENT_NODE && wantedDocs.contains(n.nodeName)) {
+			if (n.nodeType == DomNode.ELEMENT_NODE && wantedDocs.contains(n.nodeName)) {
 				toRemove.add(n)
 			}
 		}
 		toRemove.forEach { srcRoot.removeChild(it) }
-
 		// Из нового документа берём только нужные датадоки и вставляем в исходный
 		val newChildren = newRoot.childNodes
 		for (i in 0 until newChildren.length) {
 			val n = newChildren.item(i)
-			if (n.nodeType == org.w3c.dom.Node.ELEMENT_NODE && wantedDocs.contains(n.nodeName)) {
+			if (n.nodeType == DomNode.ELEMENT_NODE && wantedDocs.contains(n.nodeName)) {
 				srcRoot.appendChild(srcDoc.importNode(n, true))
 			}
 		}
-
 		// В строку
 		val transformer = TransformerFactory.newInstance().newTransformer().apply {
 			setOutputProperty(OutputKeys.INDENT, "yes")
@@ -2857,6 +2921,201 @@ class XmlXsltValidatorApp : Application() {
 		return StringWriter().use { w ->
 			transformer.transform(DOMSource(srcDoc), StreamResult(w))
 			w.toString()
+		}
+	}
+
+
+	private fun applySetValues(propertiesFile: File, dataDocsXml: String): String {
+		val xmlMapper = XmlMapper()
+		val activity: SetValueActivity = xmlMapper.readValue(propertiesFile, SetValueActivity::class.java)
+
+		// Парсим входной XML-текст
+		val dbf = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+		val doc: Document = dbf.newDocumentBuilder()
+			.parse(InputSource(StringReader(dataDocsXml)))
+		val root = doc.documentElement               // <Data> или иной корень
+		val rootName = root.nodeName
+
+		val xPath = XPathFactory.newInstance().newXPath()
+
+		activity.setValues?.items?.forEach { sv ->
+			val raw = sv.xPath ?: return@forEach
+			val expr = normalizeExpr(raw, rootName)
+			// Атрибут?
+			val atPos = expr.lastIndexOf("/@")
+			if (atPos >= 0) {
+				val parentExpr = expr.substring(0, atPos)
+				val attrName = expr.substring(atPos + 2) // после "/@"
+				// ВАЖНО: вычисляем относительно document (узел-документ) и абсолютным путём:
+				val parent = xPath.evaluate(parentExpr, doc, XPathConstants.NODE) as? Element
+					?: run {
+						// Фолбэк: игнорировать NS — через local-name()
+						val local = parentExpr.split('/').filter { it.isNotBlank() }.joinToString("/", prefix = "/") {
+							if (it == rootName) it else "*[local-name()='$it']"
+						}
+						xPath.evaluate(local, doc, XPathConstants.NODE) as? Element
+					}
+				parent?.setAttribute(attrName, sv.otherwiseValue?.valueConstant ?: return@forEach)
+			} else {
+				// Узел-элемент
+				val node = (xPath.evaluate(expr, doc, XPathConstants.NODE) as? Element)
+					?: run {
+						val local = expr.split('/').filter { it.isNotBlank() }.joinToString("/", prefix = "/") {
+							if (it == rootName) it else "*[local-name()='$it']"
+						}
+						xPath.evaluate(local, doc, XPathConstants.NODE) as? Element
+					}
+				if (node != null) {
+					node.textContent = sv.otherwiseValue?.valueConstant ?: return@forEach
+				}
+			}
+		}
+		// Обратно в строку
+		val tf = TransformerFactory.newInstance().newTransformer().apply {
+			setOutputProperty(OutputKeys.INDENT, "yes")
+			setOutputProperty(OutputKeys.ENCODING, "UTF-8")
+		}
+		return StringWriter().use { w ->
+			tf.transform(DOMSource(doc), StreamResult(w))
+			w.toString()
+		}
+	}
+
+
+	private fun normalizeExpr(expr: String, rootName: String): String {
+		val t = expr.trim().removePrefix("./")
+		if (t.startsWith("/")) {
+			return t
+		}
+		return if (t.startsWith("$rootName/")) {
+			"/$t"
+		} else {
+			"/$rootName/$t"
+		}
+	}
+
+
+	private fun processProcedure(path: Path?, activityDirection: ActivityDirection) {
+		val procedureToCall = xmlMapper.readValue(
+			path?.resolve("Properties.xml")?.toFile(),
+			ProcedureCall::class.java
+		).procedureToCall
+		val procedureDir = procedureToCall?.let { path?.parent?.parent?.parent?.resolve("Procedures")?.resolve(it) }
+			?: return
+		val procedureLayout = procedureDir.resolve("Layout.xml")
+		val layout = xmlMapper.readValue(procedureLayout.toFile(), DiagramLayout::class.java)
+		val elementRef = layout.connections?.diagramConnections
+			?.first { conn -> conn.endPoints?.points?.any { it.exitPointRef == "Start" } == true }
+			?.endPoints?.points
+			?.first { it.exitPointRef != "Start" }
+			?.elementRef
+			?: return
+		val firstActivityName = layout.elements?.diagramElements
+			?.first { el -> el.uid == elementRef }
+			?.reference
+			?: ""
+		val firstActivityProperties = procedureDir.resolve(firstActivityName).resolve("Properties.xml")
+			?: return
+		val activityType = LayoutUtil.getActivityType(firstActivityProperties.toFile())
+
+		processNextActivity(
+			firstActivityProperties,
+			activityType,
+			procedureDir,
+			activityDirection,
+		)
+	}
+
+
+	private fun processNextActivity(
+		nextActivityPropertiesPath: Path,
+		nextActivityType: ActivityType,
+		nextActivityDir: Path,
+		activityDirection: ActivityDirection,
+	) {
+		val nextActivityDataDocsInputs = getDataDocsInOut(nextActivityPropertiesPath.toFile())
+			.filter { it.access in arrayOf("Input", "InOut") }
+			.map { it.referenceName }
+		val neededDataDocs = extractNeededDataDocs(currentSession.dataDocs!!, nextActivityDataDocsInputs)
+		currentSession.xmlArea.replaceText(neededDataDocs)
+
+		if (nextActivityPropertiesPath.exists()) {
+			when (nextActivityType) {
+				ActivityType.BIZ_RULE -> {
+					val state = TabState(
+						xml = null,
+						xslt = null,
+						br = nextActivityPropertiesPath.absolutePathString(),
+						process = null
+					)
+					loadTabStateIntoSession(currentSession, state)
+					currentSession.xsltPath = null
+					currentSession.updateTabTitle()
+					brRadio.isSelected = true
+				}
+
+				ActivityType.DATA_MAPPING -> {
+					val xsltFile = nextActivityDir.resolve("Mapping.xslt")
+					val state = TabState(
+						xml = null,
+						xslt = xsltFile.absolutePathString(),
+						br = null,
+						process = null
+					)
+					loadTabStateIntoSession(currentSession, state)
+					currentSession.brPath = null
+					currentSession.updateTabTitle()
+					xsltRadio.isSelected = true
+				}
+
+				ActivityType.DATA_SOURCE -> {
+					val xsltFile = nextActivityDir.resolve("MappingInput.xslt")
+					val state = TabState(
+						xml = null,
+						xslt = xsltFile.absolutePathString(),
+						br = null,
+						process = null
+					)
+					loadTabStateIntoSession(currentSession, state)
+					currentSession.brPath = null
+					currentSession.updateTabTitle()
+					xsltRadio.isSelected = true
+				}
+
+				ActivityType.SEGMENTATION_TREE -> {
+					currentSession.mode = TransformMode.ST
+					currentSession.otherActivityPath = nextActivityPropertiesPath
+					getActivities(activityDirection)
+					return
+				}
+
+				ActivityType.SET_VALUE -> {
+					currentSession.mode = TransformMode.SV
+					currentSession.otherActivityPath = nextActivityPropertiesPath
+					getActivities(activityDirection)
+					return
+				}
+
+				ActivityType.PROCEDURE_CALL -> {
+					processProcedure(nextActivityDir, activityDirection)
+					return
+				}
+
+				ActivityType.PROCEDURE_RETURN -> {
+					activitiesDebugProcedureStack[currentSession]
+				}
+
+				ActivityType.END_PROCEDURE -> {
+					TODO()
+				}
+
+				else -> {
+					currentSession.mode = TransformMode.OTHER
+					currentSession.otherActivityPath = nextActivityPropertiesPath
+					getActivities(activityDirection)
+					return
+				}
+			}
 		}
 	}
 

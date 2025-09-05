@@ -5,6 +5,7 @@ import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import ru.ravel.xsltsandbox.models.ActivityDirection
 import ru.ravel.xsltsandbox.models.ActivityType
 import ru.ravel.xsltsandbox.models.DocSession
+import ru.ravel.xsltsandbox.models.TransformMode
 import ru.ravel.xsltsandbox.models.layout.DiagramLayout
 import java.io.File
 import java.nio.file.Path
@@ -25,8 +26,8 @@ class LayoutUtil(
 	fun getActivityByDirection(
 		selectedActivity: Path,
 		activityDirection: ActivityDirection,
-		isBr: Boolean,
-		brExit: String?,
+		mode: TransformMode,
+		exitName: String?,
 	): String? {
 		val mapper = XmlMapper().registerKotlinModule()
 
@@ -42,10 +43,28 @@ class LayoutUtil(
 			ActivityDirection.NEXT -> {
 				val nextActivityUid = diagramLayout.connections?.diagramConnections
 					?.firstOrNull { conn ->
-						if (isBr) {
-							conn.endPoints?.points?.any { it.elementRef == currentActivityUid && it.exitPointRef?.lowercase() == brExit } == true
-						} else {
-							conn.endPoints?.points?.any { it.elementRef == currentActivityUid && it.exitPointRef == "Completed" } == true
+						when (mode) {
+							TransformMode.XSLT, TransformMode.SV -> {
+								conn.endPoints?.points?.any {
+									it.elementRef == currentActivityUid && it.exitPointRef == "Completed"
+								} == true
+							}
+
+							TransformMode.BR -> {
+								conn.endPoints?.points?.any {
+									it.elementRef == currentActivityUid && it.exitPointRef?.lowercase() == exitName
+								} == true
+							}
+
+							TransformMode.ST -> {
+								conn.endPoints?.points?.any {
+									it.elementRef == currentActivityUid && it.exitPointRef == exitName
+								} == true
+							}
+
+							TransformMode.OTHER -> {
+								TODO()
+							}
 						}
 					}
 					?.endPoints?.points
@@ -107,6 +126,7 @@ class LayoutUtil(
 				header.startsWith("<EndProcessActivityDefinition") -> ActivityType.END_PROCEDURE
 				header.startsWith("<SendEMailActivityDefinition") -> ActivityType.SEND_EMAIL
 				header.startsWith("<PhaseActivityDefinition") -> ActivityType.SET_PHASE
+				header.startsWith("<BusinessRule") -> ActivityType.BUSINESS_RULE
 				else -> ActivityType.UNKNOWN
 			}
 		}
