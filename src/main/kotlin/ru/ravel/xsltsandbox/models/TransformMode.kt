@@ -5,6 +5,7 @@ enum class TransformMode {
 	BR,
 	ST,
 	SV,
+	PR,
 	OTHER,
 	;
 }

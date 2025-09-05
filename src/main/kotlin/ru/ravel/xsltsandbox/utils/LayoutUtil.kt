@@ -50,9 +50,9 @@ class LayoutUtil(
 								} == true
 							}
 
-							TransformMode.BR -> {
+							TransformMode.BR, TransformMode.PR, TransformMode.OTHER -> {
 								conn.endPoints?.points?.any {
-									it.elementRef == currentActivityUid && it.exitPointRef?.lowercase() == exitName
+									it.elementRef == currentActivityUid && it.exitPointRef?.lowercase() == exitName?.lowercase()
 								} == true
 							}
 
@@ -60,10 +60,6 @@ class LayoutUtil(
 								conn.endPoints?.points?.any {
 									it.elementRef == currentActivityUid && it.exitPointRef == exitName
 								} == true
-							}
-
-							TransformMode.OTHER -> {
-								TODO()
 							}
 						}
 					}
