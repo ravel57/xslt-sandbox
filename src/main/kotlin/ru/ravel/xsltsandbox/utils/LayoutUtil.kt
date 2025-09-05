@@ -50,7 +50,7 @@ class LayoutUtil(
 								} == true
 							}
 
-							TransformMode.BR, TransformMode.PR, TransformMode.OTHER -> {
+							TransformMode.BR, TransformMode.PROCEDURE_RETURN -> {
 								conn.endPoints?.points?.any {
 									it.elementRef == currentActivityUid && it.exitPointRef?.lowercase() == exitName?.lowercase()
 								} == true
@@ -60,6 +60,10 @@ class LayoutUtil(
 								conn.endPoints?.points?.any {
 									it.elementRef == currentActivityUid && it.exitPointRef == exitName
 								} == true
+							}
+
+							TransformMode.PR, TransformMode.OTHER -> {
+								TODO()
 							}
 						}
 					}

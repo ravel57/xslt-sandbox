@@ -2,8 +2,8 @@ package ru.ravel.xsltsandbox.models
 
 
 data class TabState(
-	val xml: String? = null,
-	val xslt: String? = null,
-	val br: String? = null,
+	val xmlPath: String? = null,
+	val xsltPath: String? = null,
+	val brPath: String? = null,
 	val process: String? = null,
 )

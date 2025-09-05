@@ -77,6 +77,7 @@ import javax.xml.xpath.XPathFactory
 import kotlin.io.path.absolutePathString
 import kotlin.io.path.exists
 import kotlin.io.path.extension
+import kotlin.io.path.name
 import org.w3c.dom.Node as DomNode
 
 
@@ -937,9 +938,9 @@ class XmlXsltValidatorApp : Application() {
 			val tabStates = workTabs.map { tab ->
 				val s = sessions[tab]!!
 				TabState(
-					xml = s.xmlPath?.toString(),
-					xslt = s.xsltPath?.toString(),
-					br = s.brPath?.toString(),
+					xmlPath = s.xmlPath?.toString(),
+					xsltPath = s.xsltPath?.toString(),
+					brPath = s.brPath?.toString(),
 					process = processPath?.toString(),
 				)
 			}
@@ -1031,13 +1032,13 @@ class XmlXsltValidatorApp : Application() {
 
 
 	private fun loadTabStateIntoSession(session: DocSession, state: TabState) {
-		state.xml?.let { p ->
+		state.xmlPath?.let { p ->
 			val path = Paths.get(p)
 			if (Files.exists(path)) {
 				loadFileIntoAreaAsync(session, path, session.xmlArea) { session.xmlPath = it }
 			}
 		}
-		state.xslt?.let { p ->
+		state.xsltPath?.let { p ->
 			val path = Paths.get(p)
 			if (Files.exists(path)) {
 				loadFileIntoAreaAsync(session, path, session.xsltArea) { loaded ->
@@ -1046,7 +1047,7 @@ class XmlXsltValidatorApp : Application() {
 				}
 			}
 		}
-		state.br?.let { p ->
+		state.brPath?.let { p ->
 			val path = Paths.get(p)
 			if (Files.exists(path)) {
 				val mapper = xmlMapper
@@ -1392,7 +1393,7 @@ class XmlXsltValidatorApp : Application() {
 				return connectionId
 			}
 
-			TransformMode.OTHER -> {
+			TransformMode.PROCEDURE_RETURN, TransformMode.OTHER -> {
 				return ""
 			}
 
@@ -2767,6 +2768,7 @@ class XmlXsltValidatorApp : Application() {
 			TransformMode.ST,
 			TransformMode.SV,
 			TransformMode.PR,
+			TransformMode.PROCEDURE_RETURN,
 			TransformMode.OTHER,
 			-> currentSession.otherActivityPath
 		} ?: return
@@ -2775,7 +2777,7 @@ class XmlXsltValidatorApp : Application() {
 
 		val exitName = when (currentSession.mode) {
 			in arrayOf(TransformMode.BR, TransformMode.ST) -> result
-			in arrayOf(TransformMode.PR, TransformMode.OTHER) -> incomeResult!!
+			in arrayOf(TransformMode.PR, TransformMode.PROCEDURE_RETURN) -> incomeResult ?: "Completed"
 			else -> null
 		}
 
@@ -3011,8 +3013,11 @@ class XmlXsltValidatorApp : Application() {
 	private fun processProcedure(path: Path, activityDirection: ActivityDirection) {
 		val file = path.resolve("Properties.xml").toFile()
 		val procedureToCall = xmlMapper.readValue(file, ProcedureCall::class.java).procedureToCall
-		val procedureDir = procedureToCall?.let { path.parent?.parent?.parent?.resolve("Procedures")?.resolve(it) }
-			?: return
+		val procedureDir = if (path.parent?.name == "MainFlow") {
+			procedureToCall?.let { path.parent?.parent?.resolve("Procedures")?.resolve(it) }
+		} else {
+			procedureToCall?.let { path.parent?.parent?.parent?.resolve("Procedures")?.resolve(it) }
+		} ?: return
 		val procedureLayout = procedureDir.resolve("Layout.xml")
 		val layout = xmlMapper.readValue(procedureLayout.toFile(), DiagramLayout::class.java)
 		val elementRef = layout.connections?.diagramConnections
@@ -3029,7 +3034,7 @@ class XmlXsltValidatorApp : Application() {
 			?: return
 		val activityType = LayoutUtil.getActivityType(firstActivityProperties.toFile())
 
-		processNextActivity(firstActivityProperties, activityType, procedureDir, activityDirection)
+		processNextActivity(firstActivityProperties, activityType, procedureDir.resolve(firstActivityName), activityDirection)
 	}
 
 
@@ -3049,9 +3054,9 @@ class XmlXsltValidatorApp : Application() {
 			when (nextActivityType) {
 				ActivityType.BIZ_RULE -> {
 					val state = TabState(
-						xml = null,
-						xslt = null,
-						br = nextActivityPropertiesPath.absolutePathString(),
+						xmlPath = null,
+						xsltPath = null,
+						brPath = nextActivityPropertiesPath.absolutePathString(),
 						process = null
 					)
 					loadTabStateIntoSession(currentSession, state)
@@ -3063,9 +3068,9 @@ class XmlXsltValidatorApp : Application() {
 				ActivityType.DATA_MAPPING -> {
 					val xsltFile = nextActivityDir.resolve("Mapping.xslt")
 					val state = TabState(
-						xml = null,
-						xslt = xsltFile.absolutePathString(),
-						br = null,
+						xmlPath = null,
+						xsltPath = xsltFile.absolutePathString(),
+						brPath = null,
 						process = null
 					)
 					loadTabStateIntoSession(currentSession, state)
@@ -3075,12 +3080,13 @@ class XmlXsltValidatorApp : Application() {
 				}
 
 				ActivityType.DATA_SOURCE -> {
-					val xsltFile = nextActivityDir.resolve("Mock.xml")
+					val xsltFile = nextActivityDir.resolve("MappingOutput.xslt")
+					val xmlFile = nextActivityDir.resolve("Mock.xml")
 					if (xsltFile.exists()) {
 						val state = TabState(
-							xml = null,
-							xslt = xsltFile.absolutePathString(),
-							br = null,
+							xmlPath = xmlFile.absolutePathString(),
+							xsltPath = xsltFile.absolutePathString(),
+							brPath = null,
 							process = null
 						)
 						loadTabStateIntoSession(currentSession, state)
@@ -3125,7 +3131,7 @@ class XmlXsltValidatorApp : Application() {
 						currentSession.otherActivityPath = nextActivityPropertiesPath
 						val result = doTransform(currentStage)
 						currentSession.otherActivityPath = activitiesDebugProcedureStack[currentSession]?.pop()
-						currentSession.mode = TransformMode.OTHER
+						currentSession.mode = TransformMode.PROCEDURE_RETURN
 						setActivityByDirection(activityDirection, result)
 						return
 					}
@@ -3136,7 +3142,7 @@ class XmlXsltValidatorApp : Application() {
 				}
 
 				else -> {
-					currentSession.mode = TransformMode.OTHER
+					currentSession.mode = TransformMode.PROCEDURE_RETURN
 					currentSession.otherActivityPath = nextActivityPropertiesPath
 					setActivityByDirection(activityDirection, null)
 					return
