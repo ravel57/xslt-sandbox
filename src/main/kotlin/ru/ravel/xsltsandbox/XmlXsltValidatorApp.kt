@@ -112,6 +112,7 @@ class XmlXsltValidatorApp : Application() {
 	private var processPath: Path? = null
 	private val activitiesDebugDataStack = mutableMapOf<DocSession, Stack<String?>>()
 	private val activitiesDebugProcedureStack = mutableMapOf<DocSession, Stack<Path>>()
+	private lateinit var fileTreeSearch: TextField
 
 	@Volatile
 	private var suspendHighlighting = 0
@@ -289,16 +290,25 @@ class XmlXsltValidatorApp : Application() {
 				dirField.text = dir.name
 				fileTree.root = buildFileTree(dir.toPath())
 				processPath = dir.toPath()
+				fileTreeSearch.isDisable = false
+				rebuildFileTreeByQuery(fileTreeSearch.text)
 				saveConfig()
 			}
 		}
+		fileTreeSearch = TextField().apply {
+			promptText = "Search"
+			isDisable = processPath == null
+			textProperty().addListener { _, _, q -> rebuildFileTreeByQuery(q) }
+		}
 		val fileTreeBox = VBox(
 			HBox(5.0, dirField, chooseBtn).apply { padding = Insets(5.0) },
+			fileTreeSearch,
 			fileTree
 		).apply {
 			VBox.setVgrow(fileTree, Priority.ALWAYS)
 			prefWidth = 260.0
 		}
+
 
 		val root = BorderPane().apply {
 			top = topBar
@@ -1083,7 +1093,13 @@ class XmlXsltValidatorApp : Application() {
 				processPath = procPath
 				Platform.runLater {
 					dirField.text = procPath.toAbsolutePath().toString()
-					fileTree.root = buildFileTree(procPath)
+					fileTreeSearch.isDisable = false
+					if (fileTreeSearch.text.isNotBlank()) {
+						fileTree.root = buildFilteredFileTree(procPath, fileTreeSearch.text)
+						expandAll(fileTree.root)
+					} else {
+						fileTree.root = buildFileTree(procPath)
+					}
 				}
 			}
 		}
@@ -1752,7 +1768,7 @@ class XmlXsltValidatorApp : Application() {
 			initOwner(owner)
 			initModality(Modality.NONE)
 //			isAlwaysOnTop = true
-			title = "Search"
+			title = "Search…"
 		}
 		searchDialog = dialog
 		val initial = target.selectedText.takeIf { it.isNotEmpty() } ?: ""
@@ -3115,11 +3131,10 @@ class XmlXsltValidatorApp : Application() {
 				}
 
 				ActivityType.PROCEDURE_CALL -> {
-					val procedure = nextActivityPropertiesPath
 					if (activitiesDebugProcedureStack.containsKey(currentSession)) {
-						activitiesDebugProcedureStack[currentSession]?.push(procedure)
+						activitiesDebugProcedureStack[currentSession]?.push(nextActivityPropertiesPath)
 					} else {
-						activitiesDebugProcedureStack[currentSession] = Stack<Path>().apply { push(procedure) }
+						activitiesDebugProcedureStack[currentSession] = Stack<Path>().apply { push(nextActivityPropertiesPath) }
 					}
 					processProcedure(nextActivityDir, activityDirection)
 					return
@@ -3149,6 +3164,83 @@ class XmlXsltValidatorApp : Application() {
 				}
 			}
 		}
+	}
+
+
+	/** «Умное» сопоставление: символы запроса должны встречаться по порядку, возможны любые вставки между ними */
+	private fun smartMatch(name: String, query: String): Boolean {
+		if (query.isBlank()) return true
+		val rx = query.asSequence()
+			.map { Regex.escape(it.toString()) }
+			.joinToString(".*", prefix = ".*", postfix = ".*")
+		return Regex(rx, RegexOption.IGNORE_CASE).containsMatchIn(name)
+	}
+
+
+	/** Рекурсивно строит отфильтрованное дерево: оставляет узлы, которые сами матчатся, или содержат потомков, которые матчатся */
+	private fun buildFilteredFileTree(path: Path, query: String): TreeItem<Path> {
+		fun filterRec(p: Path): TreeItem<Path>? {
+			val isDir = Files.isDirectory(p)
+			val selfMatches = smartMatch(p.fileName?.toString() ?: p.toString(), query)
+			val childrenItems = mutableListOf<TreeItem<Path>>()
+
+			if (isDir) {
+				// Надёжный и управляемый обход с сортировкой по имени (сначала папки, потом файлы)
+				var dirs = mutableListOf<Path>()
+				var files = mutableListOf<Path>()
+				Files.newDirectoryStream(p).use { ds ->
+					for (child in ds) {
+						if (Files.isDirectory(child)) {
+							dirs.add(child)
+						} else {
+							files.add(child)
+						}
+					}
+				}
+				dirs.sortBy { it.fileName.toString().lowercase() }
+				files.sortBy { it.fileName.toString().lowercase() }
+
+				(dirs + files).forEach { ch ->
+					filterRec(ch)?.let { childrenItems += it }
+				}
+			}
+
+			return when {
+				selfMatches -> {
+					// если папка сама совпала — показываем всё её содержимое
+					val fullChildren = mutableListOf<TreeItem<Path>>()
+					if (isDir) {
+						Files.newDirectoryStream(p).use { ds ->
+							for (child in ds) {
+								fullChildren += TreeItem(child).apply {
+									if (Files.isDirectory(child)) {
+										children.add(TreeItem<Path>()) // пустой потомок → чтобы можно было раскрывать
+									}
+								}
+							}
+						}
+					}
+					TreeItem(p).apply { children.addAll(fullChildren) }
+				}
+
+				childrenItems.isNotEmpty() -> TreeItem(p).apply { children.addAll(childrenItems) }
+				else -> null
+			}
+		}
+
+		// Корневой элемент всегда присутствует (TreeView.isShowRoot=false, так что сам root не показывается)
+		return TreeItem(path).apply {
+			val rootFiltered = filterRec(path)
+			children.setAll(rootFiltered?.children ?: emptyList())
+		}
+	}
+
+
+	/** Применяет фильтр к текущему processPath и разворачивает дерево для видимости результатов */
+	private fun rebuildFileTreeByQuery(query: String) {
+		val rootPath = processPath ?: return
+		fileTree.root = if (query.isBlank()) buildFileTree(rootPath) else buildFilteredFileTree(rootPath, query)
+		expandAll(fileTree.root) // у тебя уже есть expandAll(TreeItem<*>) — используем её
 	}
 
 
