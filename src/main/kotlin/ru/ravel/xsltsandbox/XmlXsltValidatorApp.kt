@@ -2,6 +2,7 @@ package ru.ravel.xsltsandbox
 
 import com.fasterxml.jackson.dataformat.xml.XmlMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import javafx.animation.AnimationTimer
 import javafx.application.Application
@@ -40,6 +41,7 @@ import org.w3c.dom.Element
 import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
+import ru.ravel.xsltsandbox.models.wait.Wait
 import ru.ravel.xsltsandbox.models.*
 import ru.ravel.xsltsandbox.models.ReferredDocument
 import ru.ravel.xsltsandbox.models.bizrule.*
@@ -1407,6 +1409,14 @@ class XmlXsltValidatorApp : Application() {
 					"Completed"
 				}
 				return connectionId
+			}
+
+			TransformMode.WA -> {
+				val wait = xmlMapper.readValue(currentSession.otherActivityPath?.toFile(), Wait::class.java)
+				val options = wait.commands?.items
+					?.map { cmd -> cmd.value!! }
+					?: emptyList()
+				return showChoiceDialog(options, "Choose action for: ${wait.referenceName}") ?: ""
 			}
 
 			TransformMode.PROCEDURE_RETURN, TransformMode.OTHER -> {
@@ -2785,6 +2795,7 @@ class XmlXsltValidatorApp : Application() {
 			TransformMode.SV,
 			TransformMode.PR,
 			TransformMode.PROCEDURE_RETURN,
+			TransformMode.WA,
 			TransformMode.OTHER,
 			-> currentSession.otherActivityPath
 		} ?: return
@@ -2792,7 +2803,7 @@ class XmlXsltValidatorApp : Application() {
 		val result = doTransform(currentStage)
 
 		val exitName = when (currentSession.mode) {
-			in arrayOf(TransformMode.BR, TransformMode.ST) -> result
+			in arrayOf(TransformMode.BR, TransformMode.ST, TransformMode.WA) -> result
 			in arrayOf(TransformMode.PR, TransformMode.PROCEDURE_RETURN) -> incomeResult ?: "Completed"
 			else -> null
 		}
@@ -3069,6 +3080,7 @@ class XmlXsltValidatorApp : Application() {
 		if (nextActivityPropertiesPath.exists()) {
 			when (nextActivityType) {
 				ActivityType.BIZ_RULE -> {
+					currentSession.mode = TransformMode.BR
 					val state = TabState(
 						xmlPath = null,
 						xsltPath = null,
@@ -3082,6 +3094,7 @@ class XmlXsltValidatorApp : Application() {
 				}
 
 				ActivityType.DATA_MAPPING -> {
+					currentSession.mode = TransformMode.XSLT
 					val xsltFile = nextActivityDir.resolve("Mapping.xslt")
 					val state = TabState(
 						xmlPath = null,
@@ -3096,6 +3109,7 @@ class XmlXsltValidatorApp : Application() {
 				}
 
 				ActivityType.DATA_SOURCE -> {
+					currentSession.mode = TransformMode.XSLT
 					val xsltFile = nextActivityDir.resolve("MappingOutput.xslt")
 					val xmlFile = nextActivityDir.resolve("Mock.xml")
 					if (xsltFile.exists()) {
@@ -3111,7 +3125,7 @@ class XmlXsltValidatorApp : Application() {
 						xsltRadio.isSelected = true
 					} else {
 						Platform.runLater {
-							showStatus(currentStage, "Mock.xml not found in current directory:\n${nextActivityDir}")
+							showStatus(currentStage, "Mock.xml not found in directory:\n${nextActivityDir}")
 						}
 					}
 				}
@@ -3136,6 +3150,12 @@ class XmlXsltValidatorApp : Application() {
 					} else {
 						activitiesDebugProcedureStack[currentSession] = Stack<Path>().apply { push(nextActivityPropertiesPath) }
 					}
+
+//					if (activitiesDebugDataStack.containsKey(currentSession)) {
+//						activitiesDebugDataStack[currentSession]?.push(nextActivityPropertiesPath)
+//					} else {
+//						activitiesDebugDataStack[currentSession] = Stack<String>().apply { push(nextActivityPropertiesPath) }
+//					}
 					processProcedure(nextActivityDir, activityDirection)
 					return
 				}
@@ -3154,6 +3174,15 @@ class XmlXsltValidatorApp : Application() {
 
 				ActivityType.END_PROCEDURE -> {
 					TODO()
+				}
+
+				ActivityType.FORM -> {}
+
+				ActivityType.WAIT -> {
+					currentSession.mode = TransformMode.WA
+					currentSession.otherActivityPath = nextActivityPropertiesPath
+					setActivityByDirection(activityDirection, null)
+					return
 				}
 
 				else -> {
@@ -3241,6 +3270,49 @@ class XmlXsltValidatorApp : Application() {
 		val rootPath = processPath ?: return
 		fileTree.root = if (query.isBlank()) buildFileTree(rootPath) else buildFilteredFileTree(rootPath, query)
 		expandAll(fileTree.root) // у тебя уже есть expandAll(TreeItem<*>) — используем её
+	}
+
+
+	private fun showChoiceDialog(choices: List<String>, title: String): String? {
+		var selected: String? = null
+
+		val dlg = Stage().apply {
+			initOwner(currentStage)
+			initModality(Modality.WINDOW_MODAL)
+			this.title = title
+		}
+
+		val listView = ListView<String>().apply {
+			items.addAll(choices)
+			selectionModel.selectionMode = SelectionMode.SINGLE
+		}
+
+		val okBtn = Button("OK").apply {
+			isDisable = true
+			setOnAction {
+				selected = listView.selectionModel.selectedItem
+				dlg.close()
+			}
+		}
+
+		val cancelBtn = Button("Cancel").apply {
+			setOnAction {
+				selected = null
+				dlg.close()
+			}
+		}
+
+		listView.selectionModel.selectedItemProperty().addListener { _, _, newValue ->
+			okBtn.isDisable = (newValue == null)
+		}
+
+		val buttons = HBox(10.0, okBtn, cancelBtn).apply { alignment = Pos.CENTER_RIGHT }
+		val root = VBox(10.0, listView, buttons).apply { padding = Insets(10.0) }
+
+		dlg.scene = Scene(root, 400.0, 300.0)
+		dlg.showAndWait() // блокирует до закрытия
+
+		return selected
 	}
 
 

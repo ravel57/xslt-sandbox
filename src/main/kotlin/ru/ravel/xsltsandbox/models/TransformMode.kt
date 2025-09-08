@@ -7,6 +7,7 @@ enum class TransformMode {
 	SV,
 	PR,
 	PROCEDURE_RETURN,
+	WA,
 	OTHER,
 	;
 }
