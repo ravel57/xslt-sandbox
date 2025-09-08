@@ -3,7 +3,7 @@ package ru.ravel.xsltsandbox.models.layout
 import com.fasterxml.jackson.annotation.JsonInclude
 import com.fasterxml.jackson.annotation.JsonSetter
 import com.fasterxml.jackson.annotation.Nulls
-import com.fasterxml.jackson.dataformat.xml.annotation.*
+import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlProperty
 
 
 @JsonInclude(JsonInclude.Include.NON_EMPTY)

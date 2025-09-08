@@ -2,7 +2,6 @@ package ru.ravel.xsltsandbox.utils
 
 import com.fasterxml.jackson.dataformat.xml.XmlMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import ru.ravel.xsltsandbox.models.ActivityDirection
 import ru.ravel.xsltsandbox.models.ActivityType
 import ru.ravel.xsltsandbox.models.DocSession
 import ru.ravel.xsltsandbox.models.TransformMode
@@ -23,9 +22,8 @@ class LayoutUtil(
 		}
 	}
 
-	fun getActivityByDirection(
+	fun getNextActivity(
 		selectedActivity: Path,
-		activityDirection: ActivityDirection,
 		mode: TransformMode,
 		exitName: String?,
 	): String? {
@@ -39,70 +37,41 @@ class LayoutUtil(
 			?.firstOrNull { el -> el.reference == currentActivityName }
 			?.uid
 
-		when (activityDirection) {
-			ActivityDirection.NEXT -> {
-				val nextActivityUid = diagramLayout.connections?.diagramConnections
-					?.firstOrNull { conn ->
-						when (mode) {
-							TransformMode.XSLT, TransformMode.SV -> {
-								conn.endPoints?.points?.any {
-									it.elementRef == currentActivityUid && it.exitPointRef == "Completed"
-								} == true
-							}
-
-							TransformMode.BR, TransformMode.PROCEDURE_RETURN, TransformMode.WA, TransformMode.FM -> {
-								conn.endPoints?.points?.any {
-									it.elementRef == currentActivityUid && it.exitPointRef?.lowercase() == exitName?.lowercase()
-								} == true
-							}
-
-							TransformMode.ST -> {
-								conn.endPoints?.points?.any {
-									it.elementRef == currentActivityUid && it.exitPointRef == exitName
-								} == true
-							}
-
-							TransformMode.PR, TransformMode.OTHER -> {
-								TODO()
-							}
-						}
+		val nextActivityUid = diagramLayout.connections?.diagramConnections
+			?.firstOrNull { conn ->
+				when (mode) {
+					TransformMode.XSLT, TransformMode.SV -> {
+						conn.endPoints?.points?.any {
+							it.elementRef == currentActivityUid && it.exitPointRef == "Completed"
+						} == true
 					}
-					?.endPoints?.points
-					?.firstOrNull { it.exitPointRef == "Enter" }
-					?.elementRef
-				val nextActivityName = diagramLayout.elements?.diagramElements
-					?.firstOrNull { el -> el.uid == nextActivityUid }
-					?.reference
 
-				stack[session]?.push(currentActivityName)
-				return nextActivityName
-			}
-
-			ActivityDirection.PREVIOUS -> {
-				val previousActivityUids = diagramLayout.connections?.diagramConnections
-					?.filter { conn -> conn.endPoints?.points?.any { it.elementRef == currentActivityUid && it.exitPointRef == "Enter" } == true }
-				if (previousActivityUids?.size?.let { it > 1 } == true) {
-					return stack[session]?.pop()
-				} else {
-					val previousActivityUid = previousActivityUids
-						?.firstOrNull { conn -> conn.endPoints?.points?.any { it.elementRef == currentActivityUid && it.exitPointRef == "Enter" } == true }
-						?.endPoints?.points
-						?.firstOrNull { it.elementRef != currentActivityUid }
-						?.elementRef
-					val previousActivity = diagramLayout.elements?.diagramElements
-						?.firstOrNull { el -> el.uid == previousActivityUid }
-						?.reference
-					if (stack[session]?.isNotEmpty() == true) {
-						stack[session]?.pop()
+					TransformMode.BR, TransformMode.PROCEDURE_RETURN, TransformMode.WA, TransformMode.FM -> {
+						conn.endPoints?.points?.any {
+							it.elementRef == currentActivityUid && it.exitPointRef?.lowercase() == exitName?.lowercase()
+						} == true
 					}
-					return previousActivity
+
+					TransformMode.ST -> {
+						conn.endPoints?.points?.any {
+							it.elementRef == currentActivityUid && it.exitPointRef == exitName
+						} == true
+					}
+
+					TransformMode.PR, TransformMode.OTHER -> {
+						TODO()
+					}
 				}
 			}
+			?.endPoints?.points
+			?.firstOrNull { it.exitPointRef == "Enter" }
+			?.elementRef
+		val nextActivityName = diagramLayout.elements?.diagramElements
+			?.firstOrNull { el -> el.uid == nextActivityUid }
+			?.reference
 
-			else -> {
-				throw RuntimeException("Unknown activity direction $activityDirection")
-			}
-		}
+		stack[session]?.push(currentActivityName)
+		return nextActivityName
 	}
 
 

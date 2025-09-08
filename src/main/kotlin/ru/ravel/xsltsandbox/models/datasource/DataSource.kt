@@ -3,8 +3,6 @@ package ru.ravel.xsltsandbox.models.datasource
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlProperty
 import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlRootElement
-import ru.ravel.xsltsandbox.models.datasource.Header
-import ru.ravel.xsltsandbox.models.datasource.ReferredDocuments
 
 
 @JsonIgnoreProperties(ignoreUnknown = true)

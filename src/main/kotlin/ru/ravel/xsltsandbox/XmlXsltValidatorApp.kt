@@ -113,7 +113,6 @@ class XmlXsltValidatorApp : Application() {
 	private lateinit var xsltRadio: RadioButton
 	private lateinit var brRadio: RadioButton
 	private var processPath: Path? = null
-	private val activitiesDebugDataStack = mutableMapOf<DocSession, Stack<String?>>()
 	private val activitiesDebugProcedureStack = mutableMapOf<DocSession, Stack<Path>>()
 	private lateinit var fileTreeSearch: TextField
 
@@ -275,16 +274,8 @@ class XmlXsltValidatorApp : Application() {
 
 						item.extension.equals("xml", true) && isFormOrWait -> {
 							when (type) {
-								ActivityType.FORM -> {
-									val form = xmlMapper.readValue(item.toFile(), Form::class.java)
-									newSession.mode = TransformMode.FM
-								}
-
-								ActivityType.WAIT -> {
-									val wait = xmlMapper.readValue(item.toFile(), Wait::class.java)
-									newSession.mode = TransformMode.WA
-								}
-
+								ActivityType.FORM -> newSession.mode = TransformMode.FM
+								ActivityType.WAIT -> newSession.mode = TransformMode.WA
 								else -> return@setOnMouseClicked
 							}
 							loadFileIntoAreaAsync(newSession, item, newSession.xsltArea) { newSession.xsltPath = it }
@@ -518,11 +509,6 @@ class XmlXsltValidatorApp : Application() {
 
 		val activitySeparator = Separator(Orientation.VERTICAL)
 		val activityLabel = Label("Activities debugger:")
-		val prevActivityBtn = Button().apply {
-			graphic = FontIcon(FontAwesomeSolid.ARROW_LEFT)
-			tooltip = Tooltip("Previous layout activity")
-			setOnAction { goToPreviousActivity() }
-		}
 		val nextActivityBtn = Button().apply {
 			graphic = FontIcon(FontAwesomeSolid.ARROW_RIGHT)
 			tooltip = Tooltip("Next layout activity")
@@ -532,7 +518,7 @@ class XmlXsltValidatorApp : Application() {
 			graphic = FontIcon(FontAwesomeSolid.FILE_CODE)
 			tooltip = Tooltip("Open DataDocs")
 
-			val manualItem = MenuItem("Inout text").apply {
+			val manualItem = MenuItem("Input text").apply {
 				setOnAction {
 					val dlg = Stage().apply {
 						initOwner(currentStage)
@@ -565,12 +551,9 @@ class XmlXsltValidatorApp : Application() {
 
 			val fileItem = MenuItem("Select file").apply {
 				setOnAction {
-					val file = createChooser(
-						"Open DataDocs",
-						null,
-						"XML/JSON Files (*.xml)",
-						"*.xml"
-					).showOpenDialog(currentStage) ?: return@setOnAction
+					val file = createChooser("Open DataDocs", null, "XML Files (*.xml)", "*.xml")
+						.showOpenDialog(currentStage)
+						?: return@setOnAction
 					currentSession.dataDocs = XmlUtil.readXmlSafe(file)
 					val properties = currentSession.mappingPropertyFile?.toFile()
 					if (properties != null) {
@@ -583,13 +566,21 @@ class XmlXsltValidatorApp : Application() {
 				}
 			}
 
-			items.addAll(manualItem, fileItem)
+			val exportDataDocs = MenuItem("Export to file").apply {
+				setOnAction {
+					val file = createChooser("Export DataDocs", null, "XML Files (*.xml)", "*.xml")
+						.showSaveDialog(currentStage)
+						?: return@setOnAction
+					file.writeText(currentSession.dataDocs ?: "")
+				}
+			}
+
+			items.addAll(manualItem, fileItem, SeparatorMenuItem(), exportDataDocs)
 		}
 
 		fun updateActivityButtons() {
 			val xsltLoaded = currentSession.xsltPath != null
 			val brLoaded = currentSession.brRoot != null || currentSession.brRootQuant != null
-			prevActivityBtn.isDisable = !(xsltLoaded || brLoaded)
 			nextActivityBtn.isDisable = !(xsltLoaded || brLoaded)
 		}
 
@@ -617,7 +608,6 @@ class XmlXsltValidatorApp : Application() {
 			disableHighlightCheck,
 			activitySeparator,
 			activityLabel,
-			prevActivityBtn,
 			nextActivityBtn,
 			dataDocsActivityBtn,
 		).apply {
@@ -1200,7 +1190,6 @@ class XmlXsltValidatorApp : Application() {
 						highlightAllMatches(s.resultArea, currentQuery, true)
 						s.nanCountLabel.text = ""
 						s.nanCountLabel.isVisible = false
-						showStatus(owner, "BR result:\n${result}")
 					}
 					return result.toString()
 				} catch (e: Exception) {
@@ -1237,7 +1226,6 @@ class XmlXsltValidatorApp : Application() {
 							}
 						}
 					)
-					status.append("XML is well-formed.\n")
 				} catch (ex: Exception) {
 					status.append("XML parsing halted: ${ex.message}\n")
 				}
@@ -1332,14 +1320,20 @@ class XmlXsltValidatorApp : Application() {
 					val errs = s.xsltSyntaxErrorRanges.size
 					val warns = s.xsltWarningRanges.size
 					s.xsltStatusLabel?.text = buildString {
-						if (errs > 0) append("Errors: $errs")
+						if (errs > 0) {
+							append("Errors: $errs")
+						}
 						if (warns > 0) {
-							if (errs > 0) append(", ")
+							if (errs > 0) {
+								append(", ")
+							}
 							append("Warnings: $warns")
 						}
 					}
 					s.xsltStatusLabel?.isVisible = (errs + warns) > 0
-					showStatus(owner, status.toString())
+					if (errs > 0) {
+						showStatus(owner, status.toString())
+					}
 					appendBadSelectWarnings(s, status)
 				}
 				return resultText
@@ -2004,7 +1998,7 @@ class XmlXsltValidatorApp : Application() {
 		}
 		val meta = buildXPathWithMeta(area.text, area.selection.start)
 		if (meta.xpath.isBlank()) {
-			showStatus(owner, "Не удалось построить XPath")
+			showStatus(owner, "Failed to build XPath")
 			return
 		}
 		searchDialog?.let { dlg ->
@@ -2804,20 +2798,15 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
-	private fun goToPreviousActivity() {
-		setActivityByDirection(ActivityDirection.PREVIOUS, null)
-	}
-
-
 	private fun goToNextActivity() {
-		setActivityByDirection(ActivityDirection.NEXT, null)
+		setNextActivity(null)
 	}
 
 
 	/**
 	 * Работает с [currentSession]
 	 */
-	private fun setActivityByDirection(activityDirection: ActivityDirection, incomeResult: String?) {
+	private fun setNextActivity(incomeResult: String?) {
 		val selectedActivityPath = when (currentSession.mode) {
 			TransformMode.XSLT -> currentSession.xsltPath
 			TransformMode.BR -> currentSession.brPath
@@ -2839,12 +2828,9 @@ class XmlXsltValidatorApp : Application() {
 			else -> null
 		}
 
-		val nextActivityName = LayoutUtil(currentSession).getActivityByDirection(
-			selectedActivityPath,
-			activityDirection,
-			currentSession.mode,
-			exitName
-		) ?: return
+		val nextActivityName = LayoutUtil(currentSession)
+			.getNextActivity(selectedActivityPath, currentSession.mode, exitName)
+			?: return
 
 		val nextActivityDir = selectedActivityPath.parent?.parent?.resolve(nextActivityName)
 		val nextActivityPropertiesPath = nextActivityDir?.resolve("Properties.xml")
@@ -2861,34 +2847,32 @@ class XmlXsltValidatorApp : Application() {
 			}
 		}
 
-		processNextActivity(nextActivityPropertiesPath, nextActivityType, nextActivityDir, activityDirection)
+		processNextActivity(nextActivityPropertiesPath, nextActivityType, nextActivityDir)
 	}
 
 
 	private fun getDataDocsInOut(propertyFile: File): List<ReferredDocument> {
-		val mapper = xmlMapper
-
 		val type = LayoutUtil.getActivityType(propertyFile)
 		when (type) {
 			ActivityType.BIZ_RULE -> {
-				return mapper.readValue(propertyFile, BizRule::class.java).referredDocuments.documents
+				return xmlMapper.readValue(propertyFile, BizRule::class.java).referredDocuments.documents
 					.map { ReferredDocument(it.referenceName, it.access) }
 			}
 
 			ActivityType.DATA_MAPPING -> {
-				return mapper.readValue(propertyFile, DataMapping::class.java).referredDocuments?.items
+				return xmlMapper.readValue(propertyFile, DataMapping::class.java).referredDocuments?.items
 					?.map { ReferredDocument(it.referenceName, it.access) }
 					?: emptyList()
 			}
 
 			ActivityType.DATA_SOURCE -> {
-				return mapper.readValue(propertyFile, DataSource::class.java).referredDocuments?.referredDocuments
+				return xmlMapper.readValue(propertyFile, DataSource::class.java).referredDocuments?.referredDocuments
 					?.map { ReferredDocument(it.referenceName!!, it.access!!) }
 					?: emptyList()
 			}
 
 			ActivityType.SET_VALUE -> {
-				return mapper.readValue(propertyFile, SetValueActivity::class.java).referredDocuments?.documents
+				return xmlMapper.readValue(propertyFile, SetValueActivity::class.java).referredDocuments?.documents
 					?.map { ReferredDocument(it.referenceName!!, it.access!!) }
 					?: emptyList()
 			}
@@ -3068,7 +3052,7 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
-	private fun processProcedure(path: Path, activityDirection: ActivityDirection) {
+	private fun processProcedure(path: Path) {
 		val file = path.resolve("Properties.xml").toFile()
 		val procedureToCall = xmlMapper.readValue(file, ProcedureCall::class.java).procedureToCall
 		val procedureDir = if (path.parent?.name == "MainFlow") {
@@ -3092,7 +3076,7 @@ class XmlXsltValidatorApp : Application() {
 			?: return
 		val activityType = LayoutUtil.getActivityType(firstActivityProperties.toFile())
 
-		processNextActivity(firstActivityProperties, activityType, procedureDir.resolve(firstActivityName), activityDirection)
+		processNextActivity(firstActivityProperties, activityType, procedureDir.resolve(firstActivityName))
 	}
 
 
@@ -3100,7 +3084,6 @@ class XmlXsltValidatorApp : Application() {
 		nextActivityPropertiesPath: Path,
 		nextActivityType: ActivityType,
 		nextActivityDir: Path,
-		activityDirection: ActivityDirection,
 	) {
 		val nextActivityDataDocsInputs = getDataDocsInOut(nextActivityPropertiesPath.toFile())
 			.filter { it.access in arrayOf("Input", "InOut") }
@@ -3142,8 +3125,8 @@ class XmlXsltValidatorApp : Application() {
 				ActivityType.DATA_SOURCE -> {
 					currentSession.mode = TransformMode.XSLT
 					val xsltFile = nextActivityDir.resolve("MappingOutput.xslt")
-					val xmlFile = nextActivityDir.resolve("Mock.xml")
-					if (xsltFile.exists()) {
+					val xmlFile = ensureMockXml(nextActivityDir) ?: return
+					if (xmlFile.exists()) {
 						val state = TabState(
 							xmlPath = xmlFile.absolutePathString(),
 							xsltPath = xsltFile.absolutePathString(),
@@ -3164,14 +3147,14 @@ class XmlXsltValidatorApp : Application() {
 				ActivityType.SEGMENTATION_TREE -> {
 					currentSession.mode = TransformMode.ST
 					currentSession.otherActivityPath = nextActivityPropertiesPath
-					setActivityByDirection(activityDirection, null)
+					setNextActivity(null)
 					return
 				}
 
 				ActivityType.SET_VALUE -> {
 					currentSession.mode = TransformMode.SV
 					currentSession.otherActivityPath = nextActivityPropertiesPath
-					setActivityByDirection(activityDirection, null)
+					setNextActivity(null)
 					return
 				}
 
@@ -3181,13 +3164,13 @@ class XmlXsltValidatorApp : Application() {
 					} else {
 						activitiesDebugProcedureStack[currentSession] = Stack<Path>().apply { push(nextActivityPropertiesPath) }
 					}
-
+// TODO
 //					if (activitiesDebugDataStack.containsKey(currentSession)) {
 //						activitiesDebugDataStack[currentSession]?.push(nextActivityPropertiesPath)
 //					} else {
 //						activitiesDebugDataStack[currentSession] = Stack<String>().apply { push(nextActivityPropertiesPath) }
 //					}
-					processProcedure(nextActivityDir, activityDirection)
+					processProcedure(nextActivityDir)
 					return
 				}
 
@@ -3198,7 +3181,7 @@ class XmlXsltValidatorApp : Application() {
 						val result = doTransform(currentStage)
 						currentSession.otherActivityPath = activitiesDebugProcedureStack[currentSession]?.pop()
 						currentSession.mode = TransformMode.PROCEDURE_RETURN
-						setActivityByDirection(activityDirection, result)
+						setNextActivity(result)
 						return
 					}
 				}
@@ -3207,19 +3190,26 @@ class XmlXsltValidatorApp : Application() {
 					TODO()
 				}
 
-				ActivityType.FORM -> {}
+				ActivityType.FORM -> {
+					currentSession.mode = TransformMode.FM
+					currentSession.xsltPath = nextActivityPropertiesPath
+					currentSession.otherActivityPath = nextActivityPropertiesPath
+					setNextActivity(null)
+					return
+				}
 
 				ActivityType.WAIT -> {
 					currentSession.mode = TransformMode.WA
+					currentSession.xsltPath = nextActivityPropertiesPath
 					currentSession.otherActivityPath = nextActivityPropertiesPath
-					setActivityByDirection(activityDirection, null)
+					setNextActivity(null)
 					return
 				}
 
 				else -> {
 					currentSession.mode = TransformMode.PROCEDURE_RETURN
 					currentSession.otherActivityPath = nextActivityPropertiesPath
-					setActivityByDirection(activityDirection, null)
+					setNextActivity(null)
 					return
 				}
 			}
@@ -3344,6 +3334,76 @@ class XmlXsltValidatorApp : Application() {
 		dlg.showAndWait() // блокирует до закрытия
 
 		return selected
+	}
+
+
+	/** Если в activityDir нет Mock.xml — открывает редактор и сохраняет. Возвращает путь к Mock.xml или null при отмене. */
+	private fun ensureMockXml(activityDir: Path): Path? {
+		val mock = activityDir.resolve("Mock.xml")
+		if (Files.exists(mock)) return mock
+		return showMockXmlEditor(activityDir)
+	}
+
+
+	/** Окно редактора Mock.xml для активности (папки). Сохраняет UTF-8 с BOM. */
+	private fun showMockXmlEditor(activityDir: Path): Path? {
+		var result: Path? = null
+		val dlg = Stage().apply {
+			initOwner(currentStage)
+			initModality(Modality.WINDOW_MODAL)
+			title = "Создайте Mock.xml"
+		}
+		val area = createHighlightingCodeArea(false).apply {
+			prefWidth = 820.0
+			prefHeight = 520.0
+			replaceText("<Data>\n</Data>\n")
+		}
+		val loadBtn = Button("Load from file").apply {
+			setOnAction {
+				val file = createChooser("Open XML…", null, "XML Files (*.xml)", "*.xml")
+					.showOpenDialog(currentStage) ?: return@setOnAction
+				area.replaceText(XmlUtil.readXmlSafe(file))
+			}
+		}
+		val pasteBtn = Button("Вставить из буфера").apply {
+			setOnAction { pasteFromClipboardWithProgress(area) }
+		}
+		val validateBtn = Button("Проверить XML").apply {
+			setOnAction {
+				try {
+					SAXParserFactory.newInstance().apply {
+						isNamespaceAware = true
+						isValidating = false
+					}.newSAXParser().parse(
+						InputSource(StringReader(area.text)),
+						object : DefaultHandler() {}
+					)
+					showStatus(currentStage, "XML is well-formed.")
+				} catch (e: Exception) {
+					showStatus(currentStage, "XML error: ${e.message}")
+				}
+			}
+		}
+		val saveBtn = Button("Сохранить").apply {
+			isDefaultButton = true
+			setOnAction {
+				val out = activityDir.resolve("Mock.xml").toFile()
+				XmlUtil.writeXmlWithBom(out, area.text, Charsets.UTF_8)
+				result = out.toPath()
+				dlg.close()
+			}
+		}
+		val cancelBtn = Button("Отмена").apply {
+			isCancelButton = true
+			setOnAction { result = null; dlg.close() }
+		}
+		val spacer = Region().apply { HBox.setHgrow(this, Priority.ALWAYS) }
+		val buttons = HBox(8.0, loadBtn, pasteBtn, validateBtn, spacer, saveBtn, cancelBtn).apply {
+			alignment = Pos.CENTER_RIGHT
+		}
+		dlg.scene = Scene(VBox(10.0, area, buttons).apply { padding = Insets(12.0) })
+		dlg.showAndWait()
+		return result
 	}
 
 
