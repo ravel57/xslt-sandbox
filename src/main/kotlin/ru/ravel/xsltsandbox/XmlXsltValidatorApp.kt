@@ -1441,12 +1441,16 @@ class XmlXsltValidatorApp : Application() {
 				return showChoiceDialog(options, "Choose action for: ${wait.referenceName}") ?: ""
 			}
 
-			TransformMode.PROCEDURE_RETURN, TransformMode.FM, TransformMode.OTHER -> {
+			TransformMode.FM -> {
 				val form = xmlMapper.readValue(currentSession.otherActivityPath?.toFile(), Form::class.java)
 				val options = form.commands?.activityCommands
 					?.map { cmd -> cmd.value!! }
 					?: emptyList()
 				return showChoiceDialog(options, "Choose action for: ${form.referenceName}") ?: ""
+			}
+
+			TransformMode.PROCEDURE_RETURN, TransformMode.OTHER -> {
+				return ""
 			}
 
 		}
