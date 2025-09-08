@@ -47,6 +47,7 @@ import ru.ravel.xsltsandbox.models.ReferredDocument
 import ru.ravel.xsltsandbox.models.bizrule.*
 import ru.ravel.xsltsandbox.models.datamapping.DataMapping
 import ru.ravel.xsltsandbox.models.datasource.DataSource
+import ru.ravel.xsltsandbox.models.form.Form
 import ru.ravel.xsltsandbox.models.layout.DiagramLayout
 import ru.ravel.xsltsandbox.models.procedure.ProcedureCall
 import ru.ravel.xsltsandbox.models.procedurereturn.ProcedureReturn
@@ -218,6 +219,7 @@ class XmlXsltValidatorApp : Application() {
 
 					val type = LayoutUtil.getActivityType(item.toFile())
 					val isBr = type in arrayOf(ActivityType.BIZ_RULE, ActivityType.BUSINESS_RULE)
+					val isFormOrWait = type in arrayOf(ActivityType.FORM, ActivityType.WAIT)
 					when {
 						item.extension.lowercase() in arrayOf("xsl", "xslt") -> {
 							loadFileIntoAreaAsync(newSession, item, newSession.xsltArea) { loaded ->
@@ -230,24 +232,23 @@ class XmlXsltValidatorApp : Application() {
 						}
 
 						item.extension.equals("xml", true) && isBr -> {
-							val mapper = xmlMapper
 							val innerXml = when (type) {
 								ActivityType.BIZ_RULE -> {
-									val bizRule = mapper.readValue(item.toFile(), BizRule::class.java)
+									val bizRule = xmlMapper.readValue(item.toFile(), BizRule::class.java)
 									StringEscapeUtils.unescapeXml(bizRule.xmlRule.value)
 								}
 
 								ActivityType.BUSINESS_RULE -> {
-									val businessRule = mapper.readValue(item.toFile(), BusinessRule::class.java)
+									val businessRule = xmlMapper.readValue(item.toFile(), BusinessRule::class.java)
 									StringEscapeUtils.unescapeXml(businessRule.xmlRule)
 								}
 
 								else -> return@setOnMouseClicked
 							}
 							val rootNode: Any = if (innerXml.trim().startsWith("<Quantifier")) {
-								mapper.readValue(innerXml, Quantifier::class.java)
+								xmlMapper.readValue(innerXml, Quantifier::class.java)
 							} else {
-								mapper.readValue(innerXml, Connective::class.java)
+								xmlMapper.readValue(innerXml, Connective::class.java)
 							}
 
 							when (rootNode) {
@@ -269,6 +270,27 @@ class XmlXsltValidatorApp : Application() {
 							brRadio.isSelected = true
 							newSession.brPath = item
 							newSession.mappingPropertyFile = item.parent.resolve("Properties.xml")
+							newSession.updateTabTitle()
+						}
+
+						item.extension.equals("xml", true) && isFormOrWait -> {
+							when (type) {
+								ActivityType.FORM -> {
+									val form = xmlMapper.readValue(item.toFile(), Form::class.java)
+									newSession.mode = TransformMode.FM
+								}
+
+								ActivityType.WAIT -> {
+									val wait = xmlMapper.readValue(item.toFile(), Wait::class.java)
+									newSession.mode = TransformMode.WA
+								}
+
+								else -> return@setOnMouseClicked
+							}
+							loadFileIntoAreaAsync(newSession, item, newSession.xsltArea) { newSession.xsltPath = it }
+							newSession.mappingPropertyFile = item
+							newSession.otherActivityPath = item
+							xsltRadio.isSelected = true
 							newSession.updateTabTitle()
 						}
 
@@ -1419,8 +1441,12 @@ class XmlXsltValidatorApp : Application() {
 				return showChoiceDialog(options, "Choose action for: ${wait.referenceName}") ?: ""
 			}
 
-			TransformMode.PROCEDURE_RETURN, TransformMode.OTHER -> {
-				return ""
+			TransformMode.PROCEDURE_RETURN, TransformMode.FM, TransformMode.OTHER -> {
+				val form = xmlMapper.readValue(currentSession.otherActivityPath?.toFile(), Form::class.java)
+				val options = form.commands?.activityCommands
+					?.map { cmd -> cmd.value!! }
+					?: emptyList()
+				return showChoiceDialog(options, "Choose action for: ${form.referenceName}") ?: ""
 			}
 
 		}
@@ -2796,6 +2822,7 @@ class XmlXsltValidatorApp : Application() {
 			TransformMode.PR,
 			TransformMode.PROCEDURE_RETURN,
 			TransformMode.WA,
+			TransformMode.FM,
 			TransformMode.OTHER,
 			-> currentSession.otherActivityPath
 		} ?: return
@@ -2803,7 +2830,7 @@ class XmlXsltValidatorApp : Application() {
 		val result = doTransform(currentStage)
 
 		val exitName = when (currentSession.mode) {
-			in arrayOf(TransformMode.BR, TransformMode.ST, TransformMode.WA) -> result
+			in arrayOf(TransformMode.BR, TransformMode.ST, TransformMode.WA, TransformMode.FM) -> result
 			in arrayOf(TransformMode.PR, TransformMode.PROCEDURE_RETURN) -> incomeResult ?: "Completed"
 			else -> null
 		}

@@ -50,7 +50,7 @@ class LayoutUtil(
 								} == true
 							}
 
-							TransformMode.BR, TransformMode.PROCEDURE_RETURN, TransformMode.WA -> {
+							TransformMode.BR, TransformMode.PROCEDURE_RETURN, TransformMode.WA, TransformMode.FM -> {
 								conn.endPoints?.points?.any {
 									it.elementRef == currentActivityUid && it.exitPointRef?.lowercase() == exitName?.lowercase()
 								} == true

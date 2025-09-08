@@ -8,6 +8,7 @@ enum class TransformMode {
 	PR,
 	PROCEDURE_RETURN,
 	WA,
+	FM,
 	OTHER,
 	;
 }
