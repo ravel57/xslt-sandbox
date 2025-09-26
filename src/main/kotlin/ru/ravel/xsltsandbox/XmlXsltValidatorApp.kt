@@ -1183,7 +1183,9 @@ class XmlXsltValidatorApp : Application() {
 							evalQuantifier(br, compiler, doc)
 						}
 
-						else -> false
+						else -> {
+							false
+						}
 					}
 					Platform.runLater {
 						s.resultArea.replaceText(result.toString())
@@ -2748,32 +2750,34 @@ class XmlXsltValidatorApp : Application() {
 		val vd = q.variableDefinition ?: return false
 		val xpath = vd.xpath?.value ?: return false
 
-		val values: List<String> = xpathToValues(xpath, compiler, doc)
+		val values = xpathToValues(xpath, compiler, doc)
 		val preds = q.predicates.orEmpty()
 		val quants = q.quantifiers.orEmpty()
+		val conns = q.connectives.orEmpty()
 
 		fun okFor(value: String): Boolean {
-			val local = mapOf(vd.name to value)
-			val vmap = parentVars + local
-			return preds.all { evalPredicate(it, compiler, doc, vmap) }
-					&& quants.all { evalQuantifier(it, compiler, doc, vmap) }
+			val vmap = parentVars + mapOf(vd.name to value)
+			val predsOk = preds.all { evalPredicate(it, compiler, doc, vmap) }
+			val quantsOk = quants.all { evalQuantifier(it, compiler, doc, vmap) }
+			val connsOk = conns.all { evalConnective(it, compiler, doc, vmap) }
+			return predsOk && quantsOk && connsOk
 		}
 
 		return when (kindOf(q.type)) {
 			"some", "exists", "the" -> {
-				values.any { okFor(it) }
+				values.any(::okFor)
 			}
 
 			"all", "forall" -> {
-				values.isNotEmpty() && values.all { okFor(it) }
+				values.isNotEmpty() && values.all(::okFor)
 			}
 
 			"no" -> {
-				values.isEmpty() || values.none { okFor(it) }
+				values.none(::okFor)
 			}
 
 			"exactlyone" -> {
-				values.size == 1 && okFor(values[0])
+				values.count(::okFor) == 1
 			}
 
 			else -> false
@@ -2785,56 +2789,44 @@ class XmlXsltValidatorApp : Application() {
 		c: Connective,
 		compiler: XPathCompiler,
 		doc: XdmNode,
+		vmap: Map<String, String> = emptyMap(),
 	): Boolean {
-		val predicates: List<Predicate> = c.predicates.orEmpty()
-		val quantifiers: List<Quantifier> = c.quantifiers.orEmpty()
-		val connectives: List<Connective> = c.connectives.orEmpty()
+		val preds = c.predicates.orEmpty()
+		val quants = c.quantifiers.orEmpty()
+		val conns = c.connectives.orEmpty()
 
-		val vmap: Map<String, String> = predicates
-			.mapNotNull { p ->
-				val vars = p.variables.map { it.value }
-				val constVal = p.constant?.value
-				when {
-					(vars.size == 1 && constVal != null) -> {
-						vars[0] to constVal
-					}
+		val predsAll = preds.all { evalPredicate(it, compiler, doc, vmap) }
+		val predsAny = preds.any { evalPredicate(it, compiler, doc, vmap) }
+		val quantsAll = quants.all { evalQuantifier(it, compiler, doc, vmap) }
+		val quantsAny = quants.any { evalQuantifier(it, compiler, doc, vmap) }
+		val connsAll = conns.all { evalConnective(it, compiler, doc, vmap) }
+		val connsAny = conns.any { evalConnective(it, compiler, doc, vmap) }
 
-					vars.size == 1 -> {
-						vars[0] to ""
-					}
-
-					else -> {
-						null
-					}
-				}
-			}
-			.toMap()
-
-		val predicatesOk = predicates.all { evalPredicate(it, compiler, doc, vmap) }
 		return when (kindOf(c.type)) {
 			"and" -> {
-				connectives.all { evalConnective(it, compiler, doc) } && quantifiers.all { evalQuantifier(it, compiler, doc) }
+				predsAll && quantsAll && connsAll
 			}
 
 			"or" -> {
-				connectives.any { evalConnective(it, compiler, doc) } || quantifiers.any { evalQuantifier(it, compiler, doc) }
+				predsAny || quantsAny || connsAny
 			}
 
 			"not", "no" -> {
-				connectives.none { evalConnective(it, compiler, doc) } && quantifiers.none { evalQuantifier(it, compiler, doc) }
+				!(predsAny || quantsAny || connsAny)
 			}
 
-			"some", "exists", "the" -> {
-				quantifiers.any { evalQuantifier(it, compiler, doc) }
+			"some", "exists",
+			"the",
+			-> {
+				predsAny || quantsAny || connsAny
 			}
 
 			"all", "forall" -> {
-				quantifiers.all { evalQuantifier(it, compiler, doc) }
+				predsAll && quantsAll && connsAll
 			}
 
 			else -> {
-				System.err.println("evalConnective - case else:\n$predicates\n$quantifiers\n$connectives")
-				predicatesOk
+				predsAll
 			}
 		}
 	}
