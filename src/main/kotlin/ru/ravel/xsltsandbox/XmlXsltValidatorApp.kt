@@ -2677,16 +2677,56 @@ class XmlXsltValidatorApp : Application() {
 			}
 
 			"textinequality" -> {
-				val vars: List<String> = p.variables.map { it.value }
-				val constVal: String = p.constant?.value ?: ""
+				val vars = p.variables.map { it.value }
+				val constVal = p.constant?.value ?: ""
+				when (vars.size) {
+					1 -> {
+						(vmap[vars[0]] ?: "").trim() != constVal.trim()
+					}
 
-				if (vars.size == 1) {
-					val vval: String = vmap[vars[0]]?.trim() ?: ""
-					vval != constVal.trim()
-				} else if (vars.size == 2) {
-					val v1: String = vmap[vars[0]]?.trim() ?: ""
-					val v2: String = vmap[vars[1]]?.trim() ?: ""
-					v1 != v2
+					2 -> {
+						(vmap[vars[0]] ?: "").trim() != (vmap[vars[1]] ?: "").trim()
+					}
+
+					else -> {
+						false
+					}
+				}
+			}
+
+			"numberequality" -> {
+				val vars = p.variables.map { it.value }
+				val constVal = p.constant?.value?.toDoubleOrNull()
+				if (vars.size == 1 && constVal != null) {
+					(vmap[vars[0]] ?: "").toDoubleOrNull() == constVal
+				} else {
+					false
+				}
+			}
+
+			"numberinequality" -> {
+				val vars = p.variables.map { it.value }
+				val constVal = p.constant?.value?.toDoubleOrNull()
+				if (vars.size == 1 && constVal != null) {
+					(vmap[vars[0]] ?: "").toDoubleOrNull() != constVal
+				} else {
+					false
+				}
+			}
+
+			"greaterthan" -> {
+				val vars = p.variables.map { it.value }
+				val constVal = p.constant?.value?.toDoubleOrNull()
+				if (vars.size == 1 && constVal != null) {
+					(vmap[vars[0]] ?: "").toDoubleOrNull()?.let { it > constVal } ?: false
+				} else false
+			}
+
+			"lessthan" -> {
+				val vars = p.variables.map { it.value }
+				val constVal = p.constant?.value?.toDoubleOrNull()
+				if (vars.size == 1 && constVal != null) {
+					(vmap[vars[0]] ?: "").toDoubleOrNull()?.let { it < constVal } ?: false
 				} else {
 					false
 				}
@@ -2763,7 +2803,9 @@ class XmlXsltValidatorApp : Application() {
 						vars[0] to ""
 					}
 
-					else -> null
+					else -> {
+						null
+					}
 				}
 			}
 			.toMap()
@@ -3164,12 +3206,6 @@ class XmlXsltValidatorApp : Application() {
 					} else {
 						activitiesDebugProcedureStack[currentSession] = Stack<Path>().apply { push(nextActivityPropertiesPath) }
 					}
-// TODO
-//					if (activitiesDebugDataStack.containsKey(currentSession)) {
-//						activitiesDebugDataStack[currentSession]?.push(nextActivityPropertiesPath)
-//					} else {
-//						activitiesDebugDataStack[currentSession] = Stack<String>().apply { push(nextActivityPropertiesPath) }
-//					}
 					processProcedure(nextActivityDir)
 					return
 				}
