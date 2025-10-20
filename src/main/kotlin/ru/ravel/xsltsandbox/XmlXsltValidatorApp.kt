@@ -2124,10 +2124,29 @@ class XmlXsltValidatorApp : Application() {
 				val doc = buildDocForXPath(proc, xmlText)
 				val compiler = proc.newXPathCompiler()
 				setDefaultNsFromDoc(compiler, doc)
-				val value = compiler.evaluate(expr, doc)
+				val selector = compiler.compile(expr).load()
+				selector.contextItem = doc
+				val result = selector.evaluate()
 
-				val out = buildString { value.forEach { append(it.stringValue).append('\n') } }
-					.ifBlank { "— no results —" }
+				val out = buildString {
+					for (item in result) {
+						when (item) {
+							is XdmNode -> {
+								val sw = StringWriter()
+								val serializer = proc.newSerializer(sw).apply {
+									setOutputProperty(Serializer.Property.METHOD, "xml")
+									setOutputProperty(Serializer.Property.INDENT, "yes")
+									setOutputProperty(Serializer.Property.OMIT_XML_DECLARATION, "yes")
+								}
+								serializer.serializeNode(item)
+								append(sw.toString().trim()).append("\n\n")
+							}
+							else -> append(item.stringValue).append('\n')
+						}
+
+					}
+				}.ifBlank { "— no results —" }
+
 				showStatus(primaryStage, out)
 				dlg.close()
 			} catch (ex: Exception) {
