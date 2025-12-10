@@ -2,7 +2,6 @@ package ru.ravel.xsltsandbox
 
 import com.fasterxml.jackson.dataformat.xml.XmlMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
-import com.fasterxml.jackson.module.kotlin.readValue
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import javafx.animation.AnimationTimer
 import javafx.application.Application
@@ -2893,8 +2892,9 @@ class XmlXsltValidatorApp : Application() {
 
 		if (currentSession.mode == TransformMode.XSLT) {
 			val dataDocsOutputs = getDataDocsInOut(nextActivityPropertiesPath.toFile())
-				.filter { it.access in arrayOf("InOut") }
+				.filter { it.access in arrayOf("InOut", "Input") }
 				.map { it.referenceName }
+   				.distinct()
 			if (nextActivityType in arrayOf(ActivityType.DATA_MAPPING, ActivityType.DATA_SOURCE)) {
 				currentSession.dataDocs = replaceDataDocsInString(currentSession.dataDocs!!, result, dataDocsOutputs)
 			}
@@ -2934,6 +2934,48 @@ class XmlXsltValidatorApp : Application() {
 				return emptyList()
 			}
 		}
+	}
+
+
+	private fun mergeMockWithDataDocs(mockXml: String, dataDocsXml: String, wanted: List<String>): String {
+		val dbf = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+		val builder = dbf.newDocumentBuilder()
+
+		fun parse(xml: String) = builder.parse(xml.byteInputStream(Charsets.UTF_8))
+
+		val mockDoc = parse(mockXml)
+		val dataDoc = parse(dataDocsXml)
+
+		val mockRoot = mockDoc.documentElement
+		val dataRoot = dataDoc.documentElement
+
+		fun findChild(root: Element, name: String): Element? {
+			val nodes = root.childNodes
+			for (i in 0 until nodes.length) {
+				val n = nodes.item(i)
+				if (n is Element) {
+					val ln = n.localName ?: n.nodeName
+					if (ln == name) return n
+				}
+			}
+			return null
+		}
+
+		for (docName in wanted) {
+			if (findChild(mockRoot, docName) == null) {
+				val src = findChild(dataRoot, docName)
+				val nodeToAdd = if (src != null) mockDoc.importNode(src, true) else mockDoc.createElement(docName)
+				mockRoot.appendChild(nodeToAdd)
+			}
+		}
+
+		val tf = TransformerFactory.newInstance().newTransformer().apply {
+			setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no")
+			setOutputProperty(OutputKeys.INDENT, "yes")
+		}
+		val sw = StringWriter()
+		tf.transform(DOMSource(mockDoc), StreamResult(sw))
+		return sw.toString()
 	}
 
 
@@ -3178,10 +3220,21 @@ class XmlXsltValidatorApp : Application() {
 				ActivityType.DATA_SOURCE -> {
 					currentSession.mode = TransformMode.XSLT
 					val xsltFile = nextActivityDir.resolve("MappingOutput.xslt")
-					val xmlFile = ensureMockXml(nextActivityDir) ?: return
-					if (xmlFile.exists()) {
+					val mockPath = ensureMockXml(nextActivityDir)
+						?: return
+					if (mockPath.exists()) {
+						val mockText = mockPath.toFile().readText()
+						val wantedDocs = getDataDocsInOut(nextActivityPropertiesPath.toFile())
+							.filter { it.access in arrayOf("InOut", "Input", "Output") }
+							.map { it.referenceName }
+							.distinct()
+						val sourceDocsXml = currentSession.xmlArea.text
+							.takeIf { it.isNotBlank() }
+							?: (currentSession.dataDocs ?: "")
+						val merged = mergeMockWithDataDocs(mockText, sourceDocsXml, wantedDocs)
+						mockPath.toFile().writeText(merged)
 						val state = TabState(
-							xmlPath = xmlFile.absolutePathString(),
+							xmlPath = mockPath.absolutePathString(),
 							xsltPath = xsltFile.absolutePathString(),
 							brPath = null,
 							process = null
@@ -3387,8 +3440,11 @@ class XmlXsltValidatorApp : Application() {
 	/** Если в activityDir нет Mock.xml — открывает редактор и сохраняет. Возвращает путь к Mock.xml или null при отмене. */
 	private fun ensureMockXml(activityDir: Path): Path? {
 		val mock = activityDir.resolve("Mock.xml")
-		if (Files.exists(mock)) return mock
-		return showMockXmlEditor(activityDir)
+		return if (Files.exists(mock)) {
+			mock
+		} else {
+			showMockXmlEditor(activityDir)
+		}
 	}
 
 
@@ -3398,12 +3454,12 @@ class XmlXsltValidatorApp : Application() {
 		val dlg = Stage().apply {
 			initOwner(currentStage)
 			initModality(Modality.WINDOW_MODAL)
-			title = "Создайте Mock.xml"
+			title = "Создайте Mock.xml для ${activityDir.name}"
 		}
 		val area = createHighlightingCodeArea(false).apply {
 			prefWidth = 820.0
 			prefHeight = 520.0
-			replaceText("<Data>\n</Data>\n")
+			replaceText("<ConnectorOutput>\n</ConnectorOutput>\n")
 		}
 		val loadBtn = Button("Load from file").apply {
 			setOnAction {
