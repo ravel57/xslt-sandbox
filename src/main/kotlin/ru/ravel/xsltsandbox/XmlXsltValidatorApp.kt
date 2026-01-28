@@ -386,12 +386,20 @@ class XmlXsltValidatorApp : Application() {
 			setOnAction {
 				val file = createChooser("Open XML…", currentSession.xmlPath, "XML Files (*.xml)", "*.xml")
 					.showOpenDialog(currentStage) ?: return@setOnAction
-				loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xmlArea) { currentSession.xmlPath = it }
+				loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xmlArea) {
+					currentSession.xmlPath = it
+				}
 			}
 		}
 		val openXsltBtn = Button("Open XSLT…").apply {
 			setOnAction {
-				val file = createChooser("Open XSLT…", currentSession.xsltPath, "XSLT Files (*.xsl, *.xslt)", "*.xsl", "*.xslt")
+				val file = createChooser(
+					"Open XSLT…",
+					currentSession.xsltPath,
+					"XSLT Files (*.xsl, *.xslt)",
+					"*.xsl",
+					"*.xslt"
+				)
 					.showOpenDialog(currentStage) ?: return@setOnAction
 				loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xsltArea) { path ->
 					currentSession.xsltPath = path
@@ -1346,7 +1354,8 @@ class XmlXsltValidatorApp : Application() {
 					val path = currentSession.otherActivityPath
 					val st = xmlMapper.readValue(path?.toFile(), SegmentationTree::class.java)
 					val results = st.rules?.ruleList?.mapNotNull { rule ->
-						val file = path?.parent?.parent?.parent?.parent?.resolve("BusinessRules")?.resolve("${rule.ruleID}.xml")
+						val file = path?.parent?.parent?.parent?.parent?.resolve("BusinessRules")
+							?.resolve("${rule.ruleID}.xml")
 							?.toFile()
 						if (file?.exists() == true) {
 							xmlMapper.readValue(file, BusinessRule::class.java)
@@ -2140,6 +2149,7 @@ class XmlXsltValidatorApp : Application() {
 								serializer.serializeNode(item)
 								append(sw.toString().trim()).append("\n\n")
 							}
+
 							else -> append(item.stringValue).append('\n')
 						}
 
@@ -2739,7 +2749,9 @@ class XmlXsltValidatorApp : Application() {
 				val constVal = p.constant?.value?.toDoubleOrNull()
 				if (vars.size == 1 && constVal != null) {
 					(vmap[vars[0]] ?: "").toDoubleOrNull()?.let { it > constVal } ?: false
-				} else false
+				} else {
+					false
+				}
 			}
 
 			"lessthan" -> {
@@ -2750,6 +2762,54 @@ class XmlXsltValidatorApp : Application() {
 				} else {
 					false
 				}
+			}
+
+			"textgreaterthanorequal" -> {
+				val vars = p.variables.map { it.value }
+				val constVal = p.constant?.value ?: ""
+
+				fun cmp(a: String, b: String): Int =
+					a.trim().compareTo(b.trim())
+
+				when (vars.size) {
+					1 -> cmp(vmap[vars[0]] ?: "", constVal) >= 0
+					2 -> cmp(vmap[vars[0]] ?: "", vmap[vars[1]] ?: "") >= 0
+					else -> false
+				}
+			}
+
+			"numbergreaterthan" -> {
+				val vars = p.variables.map { it.value }
+				val constVal = p.constant?.value ?: ""
+
+				fun toNum(s: String): Double? =
+					s.trim().replace(',', '.').toDoubleOrNull()
+
+				fun gt(a: String, b: String): Boolean {
+					val na = toNum(a)
+					val nb = toNum(b)
+					return na != null && nb != null && na > nb
+				}
+
+				when (vars.size) {
+					1 -> gt(vmap[vars[0]] ?: "", constVal)
+					2 -> gt(vmap[vars[0]] ?: "", vmap[vars[1]] ?: "")
+					else -> false
+				}
+			}
+
+			"numbergreaterthan" -> {
+				val vars = p.variables.map { it.value }
+
+				fun toNum(s: String): Double? =
+					s.trim().replace(',', '.').toDoubleOrNull()
+
+				if (vars.size < 2) return false
+
+				val left = toNum(vmap[vars[0]] ?: "") ?: return false
+				val right = toNum(vmap[vars[1]] ?: "") ?: return false
+
+				left > right
 			}
 
 			else -> {
@@ -2835,7 +2895,7 @@ class XmlXsltValidatorApp : Application() {
 
 			"some", "exists",
 			"the",
-			-> {
+				-> {
 				predsAny || quantsAny || connsAny
 			}
 
@@ -2869,7 +2929,7 @@ class XmlXsltValidatorApp : Application() {
 			TransformMode.WA,
 			TransformMode.FM,
 			TransformMode.OTHER,
-			-> currentSession.otherActivityPath
+				-> currentSession.otherActivityPath
 		} ?: return
 
 		val result = doTransform(currentStage)
@@ -2891,12 +2951,25 @@ class XmlXsltValidatorApp : Application() {
 		val nextActivityType = LayoutUtil.getActivityType(nextActivityPropertiesPath.toFile())
 
 		if (currentSession.mode == TransformMode.XSLT) {
-			val dataDocsOutputs = getDataDocsInOut(nextActivityPropertiesPath.toFile())
-				.filter { it.access in arrayOf("InOut", "Input") }
-				.map { it.referenceName }
-   				.distinct()
-			if (nextActivityType in arrayOf(ActivityType.DATA_MAPPING, ActivityType.DATA_SOURCE)) {
-				currentSession.dataDocs = replaceDataDocsInString(currentSession.dataDocs!!, result, dataDocsOutputs)
+			val currentProps = currentSession.mappingPropertyFile?.toFile()
+
+			val dataDocsOutputs = currentProps?.let { props ->
+				getDataDocsInOut(props)
+					.filter { it.access in arrayOf("InOut", "Output") }
+					.map { it.referenceName }
+					.distinct()
+			} ?: emptyList()
+
+			if (dataDocsOutputs.isNotEmpty() && nextActivityType in arrayOf(
+					ActivityType.DATA_MAPPING,
+					ActivityType.DATA_SOURCE
+				)
+			) {
+				currentSession.dataDocs = replaceDataDocsInString(
+					currentSession.dataDocs!!,
+					result,
+					dataDocsOutputs
+				)
 			}
 		}
 
@@ -2941,15 +3014,26 @@ class XmlXsltValidatorApp : Application() {
 		val dbf = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
 		val builder = dbf.newDocumentBuilder()
 
-		fun parse(xml: String) = builder.parse(xml.byteInputStream(Charsets.UTF_8))
+		fun parse(xml: String) = builder.parse(ByteArrayInputStream(xml.toByteArray(Charsets.UTF_8)))
 
 		val mockDoc = parse(mockXml)
-		val dataDoc = parse(dataDocsXml)
+		val docsDoc = parse(dataDocsXml)
 
+		val outDoc = builder.newDocument()
+		val outRoot = outDoc.createElement("Data")
+		outDoc.appendChild(outRoot)
+
+		// 1) целиком корень Mock.xml как ребёнок <Data>
 		val mockRoot = mockDoc.documentElement
-		val dataRoot = dataDoc.documentElement
+		outRoot.appendChild(outDoc.importNode(mockRoot, true))
 
-		fun findChild(root: Element, name: String): Element? {
+		// 2) источником датадоков считаем:
+		//    - если dataDocsXml уже <Data>...</Data> -> берём ЕГО детей
+		//    - иначе берём детей корня как есть
+		val docsRoot = docsDoc.documentElement
+		val docsContainer: Element = if ((docsRoot.localName ?: docsRoot.nodeName) == "Data") docsRoot else docsRoot
+
+		fun findDirectChildByName(root: Element, name: String): Element? {
 			val nodes = root.childNodes
 			for (i in 0 until nodes.length) {
 				val n = nodes.item(i)
@@ -2961,21 +3045,22 @@ class XmlXsltValidatorApp : Application() {
 			return null
 		}
 
-		for (docName in wanted) {
-			if (findChild(mockRoot, docName) == null) {
-				val src = findChild(dataRoot, docName)
-				val nodeToAdd = if (src != null) mockDoc.importNode(src, true) else mockDoc.createElement(docName)
-				mockRoot.appendChild(nodeToAdd)
-			}
+		// 3) добавляем нужные датадоки на том же уровне, в порядке wanted
+		for (docName in wanted.distinct()) {
+			val found = findDirectChildByName(docsContainer, docName)
+			outRoot.appendChild(
+				outDoc.importNode(found ?: outDoc.createElement(docName), true)
+			)
 		}
 
 		val tf = TransformerFactory.newInstance().newTransformer().apply {
-			setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "no")
 			setOutputProperty(OutputKeys.INDENT, "yes")
+			setOutputProperty(OutputKeys.ENCODING, "UTF-8")
 		}
-		val sw = StringWriter()
-		tf.transform(DOMSource(mockDoc), StreamResult(sw))
-		return sw.toString()
+		return StringWriter().use { w ->
+			tf.transform(DOMSource(outDoc), StreamResult(w))
+			w.toString()
+		}
 	}
 
 
@@ -3168,7 +3253,6 @@ class XmlXsltValidatorApp : Application() {
 			?.reference
 			?: ""
 		val firstActivityProperties = procedureDir.resolve(firstActivityName).resolve("Properties.xml")
-			?: return
 		val activityType = LayoutUtil.getActivityType(firstActivityProperties.toFile())
 
 		processNextActivity(firstActivityProperties, activityType, procedureDir.resolve(firstActivityName))
@@ -3232,15 +3316,16 @@ class XmlXsltValidatorApp : Application() {
 							.takeIf { it.isNotBlank() }
 							?: (currentSession.dataDocs ?: "")
 						val merged = mergeMockWithDataDocs(mockText, sourceDocsXml, wantedDocs)
-						mockPath.toFile().writeText(merged)
+
 						val state = TabState(
-							xmlPath = mockPath.absolutePathString(),
+							xmlPath = null,
 							xsltPath = xsltFile.absolutePathString(),
 							brPath = null,
 							process = null
 						)
 						loadTabStateIntoSession(currentSession, state)
-						currentSession.brPath = null
+						currentSession.xmlArea.replaceText(merged)
+						currentSession.xmlPath = null
 						currentSession.updateTabTitle()
 						xsltRadio.isSelected = true
 					} else {
@@ -3268,7 +3353,8 @@ class XmlXsltValidatorApp : Application() {
 					if (activitiesDebugProcedureStack.containsKey(currentSession)) {
 						activitiesDebugProcedureStack[currentSession]?.push(nextActivityPropertiesPath)
 					} else {
-						activitiesDebugProcedureStack[currentSession] = Stack<Path>().apply { push(nextActivityPropertiesPath) }
+						activitiesDebugProcedureStack[currentSession] =
+							Stack<Path>().apply { push(nextActivityPropertiesPath) }
 					}
 					processProcedure(nextActivityDir)
 					return
