@@ -40,7 +40,7 @@ import org.w3c.dom.Element
 import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
-import ru.ravel.xsltsandbox.models.wait.Wait
+import ru.ravel.xsltsandbox.diagram.RouteFinder
 import ru.ravel.xsltsandbox.models.*
 import ru.ravel.xsltsandbox.models.ReferredDocument
 import ru.ravel.xsltsandbox.models.bizrule.*
@@ -53,6 +53,7 @@ import ru.ravel.xsltsandbox.models.procedurereturn.ProcedureReturn
 import ru.ravel.xsltsandbox.models.segmentationtree.BusinessRule
 import ru.ravel.xsltsandbox.models.segmentationtree.SegmentationTree
 import ru.ravel.xsltsandbox.models.setvalue.SetValueActivity
+import ru.ravel.xsltsandbox.models.wait.Wait
 import ru.ravel.xsltsandbox.utils.LayoutUtil
 import ru.ravel.xsltsandbox.utils.XmlUtil
 import java.io.ByteArrayInputStream
@@ -103,6 +104,7 @@ class XmlXsltValidatorApp : Application() {
 	private val watchMap = ConcurrentHashMap<Path, Pair<DocSession, CodeArea>>()
 	private val watchDirs = mutableSetOf<Path>()
 	private lateinit var currentStage: Stage
+	private var diagramStage: Stage? = null
 	private val configPath: Path = Paths.get(System.getenv("APPDATA"), "xslt-sandbox", "config.json")
 	private lateinit var config: AppConfig
 	private var disableSyntaxHighlighting = false
@@ -585,6 +587,13 @@ class XmlXsltValidatorApp : Application() {
 			items.addAll(manualItem, fileItem, SeparatorMenuItem(), exportDataDocs)
 		}
 
+		val diagramSeparator = Separator(Orientation.VERTICAL)
+		val diagramBtn = Button().apply {
+			graphic = FontIcon(FontAwesomeSolid.SITEMAP)
+			tooltip = Tooltip("Show flow diagram")
+			setOnAction { RouteFinder(currentStage, currentSession).openFlowDiagramWindow() }
+		}
+
 		fun updateActivityButtons() {
 			val xsltLoaded = currentSession.xsltPath != null
 			val brLoaded = currentSession.brRoot != null || currentSession.brRootQuant != null
@@ -617,6 +626,8 @@ class XmlXsltValidatorApp : Application() {
 			activityLabel,
 			nextActivityBtn,
 			dataDocsActivityBtn,
+			diagramSeparator,
+			diagramBtn,
 		).apply {
 			alignment = Pos.CENTER_LEFT
 			padding = Insets(10.0)
@@ -1756,37 +1767,6 @@ class XmlXsltValidatorApp : Application() {
 			gc.lineTo(x1, y)
 		}
 		gc.stroke()
-	}
-
-
-	/**
-	 * Shows a modal dialog with validation/transformation status,
-	 * и позволяет закрыть его по нажатию ESC.
-	 */
-	private fun showStatus(owner: Stage, text: String) {
-		val dialog = Stage().apply {
-			initOwner(owner)
-			initModality(Modality.WINDOW_MODAL)
-			title = "Status"
-		}
-		val ta = TextArea(text).apply {
-			isEditable = false
-			isWrapText = true
-		}
-		val box = VBox(ta).apply {
-			padding = Insets(10.0)
-			VBox.setVgrow(ta, Priority.ALWAYS)
-		}
-		val scene = Scene(box, 500.0, 300.0).apply {
-			setOnKeyPressed { ev ->
-				if (ev.code == KeyCode.ESCAPE) {
-					dialog.close()
-				}
-			}
-		}
-
-		dialog.scene = scene
-		dialog.show()
 	}
 
 
@@ -3610,6 +3590,37 @@ class XmlXsltValidatorApp : Application() {
 		private const val UNDER_WIDTH = 1.0  // толщина линии
 		private const val UNDER_STEP = 3.0   // горизонтальный шаг «зубцов»
 		private const val UNDER_AMP = 1.0   // амплитуда (высота «зубца»)
+
+
+		/**
+		 * Shows a modal dialog with validation/transformation status,
+		 * и позволяет закрыть его по нажатию ESC.
+		 */
+		fun showStatus(owner: Stage, text: String) {
+			val dialog = Stage().apply {
+				initOwner(owner)
+				initModality(Modality.WINDOW_MODAL)
+				title = "Status"
+			}
+			val ta = TextArea(text).apply {
+				isEditable = false
+				isWrapText = true
+			}
+			val box = VBox(ta).apply {
+				padding = Insets(10.0)
+				VBox.setVgrow(ta, Priority.ALWAYS)
+			}
+			val scene = Scene(box, 500.0, 300.0).apply {
+				setOnKeyPressed { ev ->
+					if (ev.code == KeyCode.ESCAPE) {
+						dialog.close()
+					}
+				}
+			}
+
+			dialog.scene = scene
+			dialog.show()
+		}
 	}
 }
 
