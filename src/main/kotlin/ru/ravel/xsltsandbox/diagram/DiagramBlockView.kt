@@ -65,32 +65,32 @@ class DiagramBlockView(
 		}
 
 	fun applyStyle() {
-		when {
-			highlight -> {
-				rect.stroke = Color.web("#22c55e")
-				rect.strokeWidth = 4.0
-			}
-
-			isStart && isEnd -> {
-				rect.stroke = Color.web("#f97316")
-				rect.strokeWidth = 4.0
-			}
-
-			isStart -> {
-				rect.stroke = Color.web("#2563eb")
-				rect.strokeWidth = 3.0
-			}
-
-			isEnd -> {
-				rect.stroke = Color.web("#a855f7")
-				rect.strokeWidth = 3.0
-			}
-
-			else -> {
-				rect.stroke = Color.web("#334155")
-				rect.strokeWidth = 2.0
-			}
-		}
+//		when {
+//			highlight -> {
+//				rect.stroke = Color.web("#22c55e")
+//				rect.strokeWidth = 4.0
+//			}
+//
+//		isStart && isEnd -> {
+//			rect.stroke = Color.web("#f97316")
+//			rect.strokeWidth = 4.0
+//		}
+//
+//			isStart -> {
+//				rect.stroke = Color.web("#2563eb")
+//				rect.strokeWidth = 3.0
+//			}
+//
+//			isEnd -> {
+//				rect.stroke = Color.web("#a855f7")
+//				rect.strokeWidth = 3.0
+//			}
+//
+//			else -> {
+//				rect.stroke = Color.web("#334155")
+//				rect.strokeWidth = 2.0
+//			}
+//		}
 	}
 
 	private var dragOffsetX = 0.0
