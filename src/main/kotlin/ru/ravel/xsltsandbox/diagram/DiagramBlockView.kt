@@ -2,22 +2,36 @@ package ru.ravel.xsltsandbox.diagram
 
 import javafx.event.EventHandler
 import javafx.geometry.Point2D
+import javafx.scene.Node
 import javafx.scene.control.Label
+import javafx.scene.control.OverrunStyle
 import javafx.scene.input.MouseButton
 import javafx.scene.input.MouseEvent
 import javafx.scene.layout.Pane
 import javafx.scene.paint.Color
-import javafx.scene.shape.Circle
 import javafx.scene.shape.Rectangle
+import kotlin.math.max
+import kotlin.math.min
 
 class DiagramBlockView(
 	val uid: String,
 	val name: String,
 	private val w: Double = 180.0,
-	private val h: Double = 44.0,
+	private val baseH: Double = 44.0,
 ) : Pane() {
 
-	private val rect = Rectangle(w, h).apply {
+	// Параметры "облачков" выходов (внутри блока)
+	private val chipH = 18.0
+	private val chipGap = 6.0
+	private val chipPadX = 10.0
+	private val chipMaxW = 140.0
+	private val minVPad = 10.0
+
+	// ВАЖНО: не ограничиваем высоту, иначе при большом числе выходов startY получает пустой диапазон
+	// (если хочешь лимит — лучше делать скролл внутри блока, но это отдельная доработка)
+	private val maxH = Double.POSITIVE_INFINITY
+
+	private val rect = Rectangle(w, baseH).apply {
 		arcWidth = 14.0
 		arcHeight = 14.0
 		fill = Color.web("#ffffff")
@@ -27,21 +41,11 @@ class DiagramBlockView(
 
 	private val label = Label(name).apply {
 		layoutX = 12.0
-		layoutY = 12.0
 		style = "-fx-text-fill: #0f172a;"
 	}
 
-	private val inCircle = Circle(6.0).apply {
-		centerX = 0.0
-		centerY = h / 2
-		fill = Color.web("#64748b")
-	}
-
-	private val outCircle = Circle(6.0).apply {
-		centerX = w
-		centerY = h / 2
-		fill = Color.web("#64748b")
-	}
+	private val exitChips = mutableListOf<Label>()
+	private var exitNames: List<String> = emptyList()
 
 	var onMoved: (() -> Unit)? = null
 	var onPicked: ((String) -> Unit)? = null
@@ -65,32 +69,7 @@ class DiagramBlockView(
 		}
 
 	fun applyStyle() {
-//		when {
-//			highlight -> {
-//				rect.stroke = Color.web("#22c55e")
-//				rect.strokeWidth = 4.0
-//			}
-//
-//		isStart && isEnd -> {
-//			rect.stroke = Color.web("#f97316")
-//			rect.strokeWidth = 4.0
-//		}
-//
-//			isStart -> {
-//				rect.stroke = Color.web("#2563eb")
-//				rect.strokeWidth = 3.0
-//			}
-//
-//			isEnd -> {
-//				rect.stroke = Color.web("#a855f7")
-//				rect.strokeWidth = 3.0
-//			}
-//
-//			else -> {
-//				rect.stroke = Color.web("#334155")
-//				rect.strokeWidth = 2.0
-//			}
-//		}
+		// оставил как у тебя: сейчас стили закомментированы/не используются
 	}
 
 	private var dragOffsetX = 0.0
@@ -98,9 +77,10 @@ class DiagramBlockView(
 
 	init {
 		prefWidth = w
-		prefHeight = h
-		children.addAll(rect, label, inCircle, outCircle)
+		prefHeight = baseH
 
+		children.addAll(rect, label)
+		centerLabelVertically()
 		applyStyle()
 
 		val press = EventHandler<MouseEvent> { e ->
@@ -126,20 +106,144 @@ class DiagramBlockView(
 			}
 		}
 
-		listOf(rect, label).forEach {
-			it.onMousePressed = press
-			it.onMouseDragged = drag
-			it.onMouseClicked = click
+		fun attachHandlers(n: Node) {
+			n.onMousePressed = press
+			n.onMouseDragged = drag
+			n.onMouseClicked = click
+		}
+
+		attachHandlers(rect)
+		attachHandlers(label)
+	}
+
+	private fun centerLabelVertically() {
+		val hNow = rect.height
+		label.layoutY = (hNow - 18.0) / 2.0
+	}
+
+	/**
+	 * Передай реальные имена выходов — они станут "облачками" внутри блока,
+	 * высота блока автоматически увеличится.
+	 */
+	fun setExits(exits: List<String>) {
+		exitNames = exits
+		rebuildExitChips()
+		relayoutForExitCount(exitNames.size)
+	}
+
+	/**
+	 * Совместимость: только количество выходов (имена будут пустые).
+	 */
+	fun setExitCount(count: Int) {
+		val c = max(1, count)
+		if (exitNames.size != c) {
+			exitNames = List(c) { "" }
+		}
+		rebuildExitChips()
+		relayoutForExitCount(c)
+	}
+
+	private fun relayoutForExitCount(count: Int) {
+		val c = max(1, count)
+
+		val exitsArea = c * chipH + (c - 1) * chipGap
+		val requiredH = max(baseH, exitsArea + minVPad * 2.0)
+		val newH = min(maxH, requiredH)
+
+		rect.height = newH
+		prefHeight = newH
+
+		centerLabelVertically()
+		layoutExitChips()
+	}
+
+	private fun rebuildExitChips() {
+		children.removeAll(exitChips)
+		exitChips.clear()
+
+		val c = max(1, exitNames.size)
+		for (i in 0 until c) {
+			val chip = Label(exitNames.getOrNull(i).orEmpty()).apply {
+				textOverrun = OverrunStyle.ELLIPSIS
+				maxWidth = chipMaxW
+				minHeight = chipH
+				prefHeight = chipH
+				style =
+					"-fx-background-color: rgba(247,247,251,0.95);" +
+							"-fx-padding: 2 8 2 8;" +
+							"-fx-border-color: rgba(51,65,85,0.25);" +
+							"-fx-border-radius: 10;" +
+							"-fx-background-radius: 10;" +
+							"-fx-text-fill: #0f172a;" +
+							"-fx-font-size: 11px;"
+			}
+
+			// чтобы тянуть блок можно было и за "облачко"
+			chip.onMousePressed = rect.onMousePressed
+			chip.onMouseDragged = rect.onMouseDragged
+			chip.onMouseClicked = rect.onMouseClicked
+
+			exitChips += chip
+		}
+
+		children.addAll(exitChips)
+	}
+
+	private fun layoutExitChips() {
+		if (exitChips.isEmpty()) return
+
+		val c = exitChips.size
+		val hNow = rect.height
+
+		val exitsArea = c * chipH + (c - 1) * chipGap
+
+		// Безопасный расчёт startY:
+		// если "облачков" больше, чем помещается — стартуем от minVPad, без coerceIn по пустому диапазону
+		val maxStartY = hNow - exitsArea - minVPad
+		val startY = if (maxStartY <= minVPad) {
+			minVPad
+		} else {
+			((hNow - exitsArea) / 2.0).coerceIn(minVPad, maxStartY)
+		}
+
+		for (i in 0 until c) {
+			val chip = exitChips[i]
+			chip.text = exitNames.getOrNull(i).orEmpty()
+
+			chip.applyCss()
+			val pw = min(chipMaxW, chip.prefWidth(-1.0))
+			chip.prefWidth = pw
+
+			chip.layoutX = w - chipPadX - pw
+			chip.layoutY = startY + i * (chipH + chipGap)
 		}
 	}
 
 	fun inputPoint(): Point2D {
-		val p = localToParent(inCircle.centerX, inCircle.centerY)
+		val p = localToParent(0.0, rect.height / 2.0)
 		return Point2D(p.x, p.y)
 	}
 
-	fun outputPoint(): Point2D {
-		val p = localToParent(outCircle.centerX, outCircle.centerY)
+	fun outputPoint(exitIndex: Int, exitCount: Int): Point2D {
+		val c = max(1, exitCount)
+		val i = exitIndex.coerceIn(0, c - 1)
+
+		// Если есть облачка — берём центр конкретного облачка
+		if (exitChips.isNotEmpty() && i < exitChips.size) {
+			val chip = exitChips[i]
+			val localY = chip.layoutY + chipH / 2.0
+			val p = localToParent(w, localY)
+			return Point2D(p.x, p.y)
+		}
+
+		// fallback
+		val p = localToParent(w, rect.height / 2.0)
 		return Point2D(p.x, p.y)
+	}
+
+	override fun layoutChildren() {
+		super.layoutChildren()
+		layoutExitChips()
+		centerLabelVertically()
 	}
 }

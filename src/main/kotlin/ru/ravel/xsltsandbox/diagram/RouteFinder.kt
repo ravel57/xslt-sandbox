@@ -11,6 +11,12 @@ import javafx.scene.control.ComboBox
 import javafx.scene.control.Label
 import javafx.scene.control.ListView
 import javafx.scene.control.ScrollPane
+import javafx.geometry.Bounds
+import javafx.geometry.BoundingBox
+import javafx.geometry.Point2D
+import javafx.scene.shape.LineTo
+import javafx.scene.shape.MoveTo
+import javafx.scene.shape.Path as FxPath
 import javafx.scene.layout.BorderPane
 import javafx.scene.layout.HBox
 import javafx.scene.layout.Pane
@@ -28,6 +34,8 @@ import ru.ravel.xsltsandbox.models.layout.DiagramLayout
 import javafx.collections.FXCollections
 import javafx.collections.ObservableList
 import javafx.collections.transformation.FilteredList
+import javafx.scene.shape.Circle
+import javafx.scene.text.Text
 import java.util.function.Predicate
 
 class RouteFinder(
@@ -218,7 +226,7 @@ class RouteFinder(
 		}
 
 		val blocks = mutableMapOf<String, DiagramBlockView>()
-		val connections = mutableListOf<ConnView>()
+		val connections = mutableListOf<DiagramConnView>()
 
 		fun clearDiagram() {
 			linesLayer.children.clear()
@@ -264,35 +272,74 @@ class RouteFinder(
 					blocksLayer.children.add(block)
 				}
 			}
+			val connMap = LinkedHashMap<ExitKey, DiagramConnView>()
+			val allEdgesForPorts = ArrayList<DirEdge>().apply {
+				addAll(layoutInfo.edges)
+				addAll(cyclesGraph.cycleEdges)
+			}
 
-						// сначала обычные связи (по найденным маршрутам)
-			val connMap = LinkedHashMap<Pair<String, String>, ConnView>()
+			val portsByFrom: Map<String, List<String>> = allEdgesForPorts
+				.groupBy { it.fromUid }
+				.mapValues { (_, edges) ->
+					edges.map { e ->
+						val raw = e.exitLabel()?.trim().orEmpty()
+						if (raw.isNotBlank()) raw else "→ " + (uidToName[e.toUid] ?: e.toUid)
+					}.distinct()
+				}
 
-			fun putConn(fromUid: String, toUid: String, isCycle: Boolean) {
+			blocks.forEach { (uid, block) ->
+				val exits = portsByFrom[uid].orEmpty()
+				block.setExits(exits)
+			}
+
+			fun resolveExitName(fromUid: String, toUid: String, rawExit: String?): String {
+				val raw = rawExit?.trim().orEmpty()
+				if (raw.isNotBlank()) return raw
+				return "→ " + (uidToName[toUid] ?: toUid)
+			}
+
+			fun putConn(fromUid: String, toUid: String, rawExitName: String?, isCycle: Boolean) {
 				val from = blocks[fromUid] ?: return
 				val to = blocks[toUid] ?: return
-				val key = fromUid to toUid
+
+				val exitName = resolveExitName(fromUid, toUid, rawExitName)
+				val ports = portsByFrom[fromUid] ?: listOf(exitName)
+				val exitIndex = ports.indexOf(exitName).let { if (it >= 0) it else 0 }
+				val exitCount = ports.size.coerceAtLeast(1)
+
+				val key = ExitKey(fromUid, exitName)
+				val style = if (isCycle) EdgeStyle.CYCLE else EdgeStyle.ROUTE
 
 				val existing = connMap[key]
 				if (existing != null) {
-					if (isCycle) existing.setCycle(true)
 					return
 				}
-
-				val conn = ConnView(fromUid = fromUid, toUid = toUid, from = from, to = to, isCycle = isCycle)
+				val conn = DiagramConnView(
+					from = from,
+					to = to,
+					exitName = exitName,
+					exitIndex = exitIndex,
+					exitCount = exitCount,
+					routeYProvider = {
+						blocks.values.maxOfOrNull { it.layoutY + it.boundsInParent.maxY }?.plus(60.0) ?: 500.0
+					}
+				)
+				conn.onPicked = { picked ->
+					connections.forEach { it.selected = (it === picked) }
+				}
+				linesLayer.children.addAll(conn.path, conn.pick, conn.arrow)
 				connMap[key] = conn
 				connections.add(conn)
-				linesLayer.children.addAll(conn.line, conn.arrow1, conn.arrow2)
 				conn.update()
 			}
 
 			layoutInfo.edges.forEach { e ->
-				putConn(fromUid = e.fromUid, toUid = e.toUid, isCycle = false)
+				putConn(fromUid = e.fromUid, toUid = e.toUid, rawExitName = e.exitLabel(), isCycle = false)
 			}
 
 			// дополнительно дорисовываем "замыкающие" связи циклов (если обе активности видимы на диаграмме)
 			cyclesGraph.cycleEdges.forEach { e ->
-				putConn(fromUid = e.fromUid, toUid = e.toUid, isCycle = true)
+				putConn(fromUid = e.fromUid, toUid = e.toUid, rawExitName = e.exitLabel(), isCycle = true)
 			}
 
 		}
@@ -350,92 +397,92 @@ class RouteFinder(
 	}
 
 	// ========= cycles detection =========
-		private data class CyclesGraphInfo(
-			val cycleEdges: List<DirEdge>,
-			val cyclicNodeUids: Set<String>,
-			val cyclesCount: Int
-		)
+	private data class CyclesGraphInfo(
+		val cycleEdges: List<DirEdge>,
+		val cyclicNodeUids: Set<String>,
+		val cyclesCount: Int
+	)
 
-		private fun computeCyclesGraphInfo(dirEdges: List<DirEdge>): CyclesGraphInfo {
-			val nodes = LinkedHashSet<String>()
-			val adj = HashMap<String, MutableList<String>>()
-			dirEdges.forEach { e ->
-				nodes.add(e.fromUid)
-				nodes.add(e.toUid)
-				adj.computeIfAbsent(e.fromUid) { mutableListOf() }.add(e.toUid)
-				adj.computeIfAbsent(e.toUid) { mutableListOf() } // ensure key exists
-			}
-
-			var index = 0
-			val idx = HashMap<String, Int>()
-			val low = HashMap<String, Int>()
-			val stack = ArrayDeque<String>()
-			val onStack = HashSet<String>()
-			val sccs = mutableListOf<List<String>>()
-
-			fun strongConnect(v: String) {
-				idx[v] = index
-				low[v] = index
-				index++
-
-				stack.addLast(v)
-				onStack.add(v)
-
-				adj[v]?.forEach { w ->
-					if (!idx.containsKey(w)) {
-						strongConnect(w)
-						low[v] = kotlin.math.min(low[v]!!, low[w]!!)
-					} else if (onStack.contains(w)) {
-						low[v] = kotlin.math.min(low[v]!!, idx[w]!!)
-					}
-				}
-
-				if (low[v] == idx[v]) {
-					val comp = mutableListOf<String>()
-					while (true) {
-						val w = stack.removeLast()
-						onStack.remove(w)
-						comp.add(w)
-						if (w == v) break
-					}
-					sccs.add(comp)
-				}
-			}
-
-			nodes.forEach { v ->
-				if (!idx.containsKey(v)) strongConnect(v)
-			}
-
-			val compId = HashMap<String, Int>()
-			sccs.forEachIndexed { i, comp -> comp.forEach { compId[it] = i } }
-
-			// SCC считается циклом если > 1 узла, либо одиночный узел с самопетлёй
-			val compIsCycle = BooleanArray(sccs.size)
-			sccs.forEachIndexed { i, comp ->
-				if (comp.size > 1) {
-					compIsCycle[i] = true
-				} else {
-					val v = comp[0]
-					compIsCycle[i] = adj[v]?.any { it == v } == true
-				}
-			}
-
-			val cyclicNodeUids = HashSet<String>()
-			sccs.forEachIndexed { i, comp ->
-				if (compIsCycle[i]) cyclicNodeUids.addAll(comp)
-			}
-
-			val cycleEdges = dirEdges
-				.filter { e ->
-					val a = compId[e.fromUid] ?: return@filter false
-					val b = compId[e.toUid] ?: return@filter false
-					a == b && compIsCycle[a]
-				}
-				.distinctBy { it.fromUid to it.toUid }
-
-			val cyclesCount = compIsCycle.count { it }
-			return CyclesGraphInfo(cycleEdges = cycleEdges, cyclicNodeUids = cyclicNodeUids, cyclesCount = cyclesCount)
+	private fun computeCyclesGraphInfo(dirEdges: List<DirEdge>): CyclesGraphInfo {
+		val nodes = LinkedHashSet<String>()
+		val adj = HashMap<String, MutableList<String>>()
+		dirEdges.forEach { e ->
+			nodes.add(e.fromUid)
+			nodes.add(e.toUid)
+			adj.computeIfAbsent(e.fromUid) { mutableListOf() }.add(e.toUid)
+			adj.computeIfAbsent(e.toUid) { mutableListOf() } // ensure key exists
 		}
+
+		var index = 0
+		val idx = HashMap<String, Int>()
+		val low = HashMap<String, Int>()
+		val stack = ArrayDeque<String>()
+		val onStack = HashSet<String>()
+		val sccs = mutableListOf<List<String>>()
+
+		fun strongConnect(v: String) {
+			idx[v] = index
+			low[v] = index
+			index++
+
+			stack.addLast(v)
+			onStack.add(v)
+
+			adj[v]?.forEach { w ->
+				if (!idx.containsKey(w)) {
+					strongConnect(w)
+					low[v] = kotlin.math.min(low[v]!!, low[w]!!)
+				} else if (onStack.contains(w)) {
+					low[v] = kotlin.math.min(low[v]!!, idx[w]!!)
+				}
+			}
+
+			if (low[v] == idx[v]) {
+				val comp = mutableListOf<String>()
+				while (true) {
+					val w = stack.removeLast()
+					onStack.remove(w)
+					comp.add(w)
+					if (w == v) break
+				}
+				sccs.add(comp)
+			}
+		}
+
+		nodes.forEach { v ->
+			if (!idx.containsKey(v)) strongConnect(v)
+		}
+
+		val compId = HashMap<String, Int>()
+		sccs.forEachIndexed { i, comp -> comp.forEach { compId[it] = i } }
+
+		// SCC считается циклом если > 1 узла, либо одиночный узел с самопетлёй
+		val compIsCycle = BooleanArray(sccs.size)
+		sccs.forEachIndexed { i, comp ->
+			if (comp.size > 1) {
+				compIsCycle[i] = true
+			} else {
+				val v = comp[0]
+				compIsCycle[i] = adj[v]?.any { it == v } == true
+			}
+		}
+
+		val cyclicNodeUids = HashSet<String>()
+		sccs.forEachIndexed { i, comp ->
+			if (compIsCycle[i]) cyclicNodeUids.addAll(comp)
+		}
+
+		val cycleEdges = dirEdges
+			.filter { e ->
+				val a = compId[e.fromUid] ?: return@filter false
+				val b = compId[e.toUid] ?: return@filter false
+				a == b && compIsCycle[a]
+			}
+			.distinctBy { it.fromUid to it.toUid }
+
+		val cyclesCount = compIsCycle.count { it }
+		return CyclesGraphInfo(cycleEdges = cycleEdges, cyclicNodeUids = cyclicNodeUids, cyclesCount = cyclesCount)
+	}
 
 	private fun computeCycles(edges: List<DirEdge>, uidToName: Map<String, String>): List<CycleInfo> {
 		val adj = mutableMapOf<String, MutableList<String>>()
@@ -552,84 +599,39 @@ class RouteFinder(
 		return cycle
 	}
 
-	// ========= connection view =========
-	private class ConnView(
-		val fromUid: String,
-		val toUid: String,
-		private val from: DiagramBlockView,
-		private val to: DiagramBlockView,
-		isCycle: Boolean
-	) {
-		private var cycle: Boolean = isCycle
 
-		val line = Line()
-		val arrow1 = Polygon()
-		val arrow2 = Polygon()
-
-		init {
-			applyStyle()
-		}
-
-		fun setCycle(v: Boolean) {
-			if (!cycle && v) {
-				cycle = true
-				applyStyle()
-			}
-		}
-
-		private fun applyStyle() {
-			if (cycle) {
-				line.stroke = Color.web("#ff9d00")
-				line.strokeWidth = 2.5
-				line.strokeDashArray.setAll(10.0, 8.0)
-				arrow1.fill = Color.web("#ff9d00")
-				arrow2.fill = Color.web("#ff9d00")
-			} else {
-				line.stroke = Color.web("#64748b")
-				line.strokeWidth = 2.0
-				line.strokeDashArray.clear()
-				arrow1.fill = Color.web("#64748b")
-				arrow2.fill = Color.web("#64748b")
-			}
-		}
-
-		fun update() {
-			val p1 = from.outputPoint()
-			val p2 = to.inputPoint()
-
-			line.startX = p1.x
-			line.startY = p1.y
-			line.endX = p2.x
-			line.endY = p2.y
-
-			val dx = p2.x - p1.x
-			val dy = p2.y - p1.y
-			val len = kotlin.math.sqrt(dx * dx + dy * dy)
-			if (len < 0.0001) return
-
-			val ux = dx / len
-			val uy = dy / len
-
-			val arrowLen = 10.0
-			val arrowWidth = 6.0
-
-			val tipX = p2.x
-			val tipY = p2.y
-
-			val baseX = tipX - ux * arrowLen
-			val baseY = tipY - uy * arrowLen
-
-			val px = -uy
-			val py = ux
-
-			val leftX = baseX + px * arrowWidth
-			val leftY = baseY + py * arrowWidth
-
-			val rightX = baseX - px * arrowWidth
-			val rightY = baseY - py * arrowWidth
-
-			arrow1.points.setAll(tipX, tipY, leftX, leftY, rightX, rightY)
-			arrow2.points.setAll(tipX, tipY, leftX, leftY, rightX, rightY)
-		}
+	private enum class EdgeStyle {
+		NORMAL,
+		ROUTE,
+		CYCLE
 	}
+
+	private data class ExitKey(val fromUid: String, val exit: String)
+
+	private fun DirEdge.exitLabel(): String? {
+		val c = this.javaClass
+		val getterNames = listOf(
+			"getExitName",
+			"getExit",
+			"getOutcome",
+			"getOutcomeName",
+			"getLabel",
+			"getVia"
+		)
+		for (g in getterNames) {
+			val m = c.methods.firstOrNull { it.name == g && it.parameterCount == 0 } ?: continue
+			val v = runCatching { m.invoke(this) }.getOrNull() ?: continue
+			when (v) {
+				is String -> if (v.isNotBlank()) return v
+				is Enum<*> -> return v.name
+				else -> {
+					val nm = v.javaClass.methods.firstOrNull { it.name == "getName" && it.parameterCount == 0 }
+					val s = runCatching { nm?.invoke(v) }.getOrNull()
+					if (s is String && s.isNotBlank()) return s
+				}
+			}
+		}
+		return null
+	}
+
 }
