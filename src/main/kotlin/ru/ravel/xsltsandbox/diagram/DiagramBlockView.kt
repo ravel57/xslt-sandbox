@@ -1,6 +1,7 @@
 package ru.ravel.xsltsandbox.diagram
 
 import javafx.event.EventHandler
+import javafx.scene.effect.DropShadow
 import javafx.geometry.Point2D
 import javafx.scene.Node
 import javafx.scene.control.Label
@@ -69,7 +70,35 @@ class DiagramBlockView(
 		}
 
 	fun applyStyle() {
-		// оставил как у тебя: сейчас стили закомментированы/не используются
+		// Базовые цвета
+		val baseStroke = Color.web("#334155")
+		val baseFill = Color.web("#ffffff")
+
+		// Статусы start/end
+		val startStroke = Color.web("#16a34a") // green-600
+		val endStroke = Color.web("#dc2626")   // red-600
+
+		// Debug highlight
+		val hlStroke = Color.web("#f59e0b")    // amber-500
+
+		rect.fill = baseFill
+		rect.strokeWidth = 2.0
+		rect.stroke = when {
+			highlight -> hlStroke
+			isStart -> startStroke
+			isEnd -> endStroke
+			else -> baseStroke
+		}
+
+		// Легкая подсветка тенью только в debug-highlight, чтобы не шумело постоянно
+		rect.effect = if (highlight) {
+			DropShadow().apply {
+				radius = 18.0
+				offsetX = 0.0
+				offsetY = 0.0
+				color = Color.web("#f59e0b", 0.55)
+			}
+		} else null
 	}
 
 	private var dragOffsetX = 0.0

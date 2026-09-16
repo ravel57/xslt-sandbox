@@ -4,6 +4,9 @@ import com.fasterxml.jackson.dataformat.xml.XmlMapper
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
 import javafx.animation.AnimationTimer
+import javafx.animation.KeyFrame
+import javafx.animation.Timeline
+import javafx.util.Duration
 import javafx.application.Application
 import javafx.application.Platform
 import javafx.concurrent.Task
@@ -17,8 +20,10 @@ import javafx.scene.canvas.Canvas
 import javafx.scene.canvas.GraphicsContext
 import javafx.scene.control.*
 import javafx.scene.input.Clipboard
+import javafx.scene.input.ClipboardContent
 import javafx.scene.input.KeyCode
 import javafx.scene.input.KeyEvent
+import javafx.scene.image.Image
 import javafx.scene.layout.*
 import javafx.scene.paint.Color
 import javafx.stage.DirectoryChooser
@@ -27,6 +32,7 @@ import javafx.stage.Modality
 import javafx.stage.Stage
 import net.sf.saxon.s9api.*
 import org.apache.commons.text.StringEscapeUtils
+import org.ccil.cowan.tagsoup.Parser
 import org.fxmisc.flowless.VirtualizedScrollPane
 import org.fxmisc.richtext.CodeArea
 import org.fxmisc.richtext.LineNumberFactory
@@ -41,6 +47,7 @@ import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
 import ru.ravel.xsltsandbox.diagram.RouteFinder
+import ru.ravel.xsltsandbox.diagram.FlowGraphExtractor
 import ru.ravel.xsltsandbox.models.*
 import ru.ravel.xsltsandbox.models.ReferredDocument
 import ru.ravel.xsltsandbox.models.bizrule.*
@@ -85,6 +92,26 @@ import org.w3c.dom.Node as DomNode
 
 
 class XmlXsltValidatorApp : Application() {
+	private fun applyAppIcon(stage: Stage) {
+		val resource = listOf(
+			"/icons/XSLTSandbox.png",
+			"/icons/app.png",
+			"/icons/icon.png",
+		).firstNotNullOfOrNull { path ->
+			XmlXsltValidatorApp::class.java.getResource(path)
+		}
+
+		if (resource == null) {
+			System.err.println("Application icon not found. Put XSLTSandbox.png into src/main/resources/icons/")
+			return
+		}
+
+		runCatching {
+			stage.icons.setAll(Image(resource.toExternalForm()))
+		}.onFailure { ex ->
+			System.err.println("Failed to load application icon: ${ex.message}")
+		}
+	}
 	private val xmlMapper = XmlMapper().registerKotlinModule()
 
 	private lateinit var tabPane: TabPane
@@ -146,6 +173,7 @@ class XmlXsltValidatorApp : Application() {
 
 	override fun start(primaryStage: Stage) {
 		currentStage = primaryStage
+		applyAppIcon(primaryStage)
 
 		tabPane = TabPane().apply {
 			tabClosingPolicy = TabPane.TabClosingPolicy.ALL_TABS
@@ -523,6 +551,12 @@ class XmlXsltValidatorApp : Application() {
 			tooltip = Tooltip("Next layout activity")
 			setOnAction { goToNextActivity() }
 		}
+
+		val runDebugBtn = Button("Run debug").apply {
+			tooltip = Tooltip("Run debugger through all possible routes (requires DataDocs)")
+			setOnAction { runDebugAllPaths() }
+		}
+
 		val dataDocsActivityBtn = MenuButton().apply {
 			graphic = FontIcon(FontAwesomeSolid.FILE_CODE)
 			tooltip = Tooltip("Open DataDocs")
@@ -598,6 +632,7 @@ class XmlXsltValidatorApp : Application() {
 			val xsltLoaded = currentSession.xsltPath != null
 			val brLoaded = currentSession.brRoot != null || currentSession.brRootQuant != null
 			nextActivityBtn.isDisable = !(xsltLoaded || brLoaded)
+			runDebugBtn.isDisable = currentSession.dataDocs.isNullOrBlank() || !(xsltLoaded || brLoaded)
 		}
 
 		dataDocsActivityBtn.items.forEach { item ->
@@ -625,6 +660,7 @@ class XmlXsltValidatorApp : Application() {
 			activitySeparator,
 			activityLabel,
 			nextActivityBtn,
+			runDebugBtn,
 			dataDocsActivityBtn,
 			diagramSeparator,
 			diagramBtn,
@@ -667,7 +703,7 @@ class XmlXsltValidatorApp : Application() {
 					val selected = selectionModel.selectedItem
 					if (selected != null) {
 						val clip = Clipboard.getSystemClipboard()
-						val content = javafx.scene.input.ClipboardContent()
+						val content = ClipboardContent()
 						content.putString(selected.value)
 						clip.setContent(content)
 					}
@@ -682,7 +718,7 @@ class XmlXsltValidatorApp : Application() {
 						val selected = selectionModel.selectedItem
 						if (selected != null) {
 							val clip = Clipboard.getSystemClipboard()
-							val content = javafx.scene.input.ClipboardContent()
+							val content = ClipboardContent()
 							content.putString(selected.value)
 							clip.setContent(content)
 						}
@@ -764,9 +800,71 @@ class XmlXsltValidatorApp : Application() {
 			it.xsltBox = xsltBox
 			it.brBox = brBox
 		}
+		session.onDebugStep = { goToNextActivity() }
+		session.onDebugRun = { runDebugAllPathsBackground() }
+		session.onOpenDataDocsViewer = { owner, title, text ->
+			openDataDocsViewer(owner, title, text)
+		}
 		sessions[tab] = session
 		hookOverlayRedraw(session)
 		return session
+	}
+
+
+	private fun openDataDocsViewer(owner: Stage, title: String, text: String) {
+		val area = createHighlightingCodeArea(highlightNaN = false).apply {
+			isEditable = false
+			replaceText(text)
+		}
+
+		val root = VBox(
+			VirtualizedScrollPane(area).apply { VBox.setVgrow(this, Priority.ALWAYS) }
+		).apply { padding = Insets(8.0) }
+
+		val st = Stage().apply {
+			initOwner(owner)
+			this.title = title
+		}
+
+		val scene = Scene(root, 900.0, 700.0)
+		scene.addEventFilter(KeyEvent.KEY_PRESSED) { e ->
+			if (e.isControlDown && e.code == KeyCode.F) {
+				showSearchWindow(st, area)
+				e.consume()
+			}
+		}
+		st.scene = scene
+		st.show()
+		st.toFront()
+	}
+
+
+	private fun runDebugAllPathsBackground() {
+		val session = currentSession ?: return
+
+		if (session.dataDocs.isNullOrBlank()) {
+			showStatus(currentStage, "DataDocs пустые — вставьте DataDocs")
+			return
+		}
+
+		val task = object : javafx.concurrent.Task<String>() {
+			override fun call(): String {
+				val report = StringBuilder()
+				return report.toString()
+			}
+		}
+
+		task.setOnSucceeded {
+			val report = task.value ?: ""
+			openDataDocsViewer(currentStage, "Debug report", report)
+		}
+
+		task.setOnFailed {
+			val ex = task.exception
+			showStatus(currentStage, "Run debug error: ${ex?.message ?: "unknown"}")
+		}
+
+		Thread(task, "debug-runner").apply { isDaemon = true }.start()
 	}
 
 
@@ -1826,12 +1924,12 @@ class XmlXsltValidatorApp : Application() {
 		}
 		field.setOnKeyPressed { event ->
 			when {
-				event.code == javafx.scene.input.KeyCode.ENTER && !event.isShiftDown -> {
+				event.code == KeyCode.ENTER && !event.isShiftDown -> {
 					search(target, field.text, forward = true)
 					event.consume()
 				}
 
-				event.code == javafx.scene.input.KeyCode.ENTER && event.isShiftDown -> {
+				event.code == KeyCode.ENTER && event.isShiftDown -> {
 					search(target, field.text, forward = false)
 					event.consume()
 				}
@@ -1857,6 +1955,38 @@ class XmlXsltValidatorApp : Application() {
 			highlightAllMatches(target, field.text, true)
 		}
 	}
+
+fun showDataDocsViewer(owner: Stage, title: String, text: String) {
+    val area = CodeArea().apply {
+        replaceText(text)
+        isEditable = false
+    }
+    // Номера строк + сворачивание XML-веток
+    installFolding(area)
+
+    val stage = Stage().apply {
+        initOwner(owner)
+        initModality(Modality.NONE)
+        this.title = title
+    }
+
+    // Ctrl+F
+    stage.addEventFilter(KeyEvent.KEY_PRESSED) { event ->
+        if (event.code == KeyCode.F && event.isControlDown) {
+            showSearchWindow(stage, area)
+            event.consume()
+        }
+    }
+
+    val root = BorderPane().apply {
+        center = VirtualizedScrollPane(area)
+        padding = Insets(8.0)
+    }
+    stage.scene = Scene(root, 900.0, 700.0)
+    stage.show()
+    stage.toFront()
+}
+
 
 
 	private fun allMatches(text: String, query: String): List<IntRange> {
@@ -2046,7 +2176,7 @@ class XmlXsltValidatorApp : Application() {
 		searchDialog = dlg
 		okBtn.setOnAction {
 			val clip = Clipboard.getSystemClipboard()
-			clip.setContent(javafx.scene.input.ClipboardContent().apply {
+			clip.setContent(ClipboardContent().apply {
 				putString(resultField.text)
 			})
 			dlg.close()
@@ -2183,7 +2313,7 @@ class XmlXsltValidatorApp : Application() {
 					Regex("""<html(\s|>)""", RegexOption.IGNORE_CASE).containsMatchIn(trimmed) ||
 					Regex("""<body(\s|>)""", RegexOption.IGNORE_CASE).containsMatchIn(trimmed)
 		if (looksHtml) {
-			val parser = org.ccil.cowan.tagsoup.Parser()
+			val parser = Parser()
 			val src = SAXSource(parser, InputSource(StringReader(trimmed)))
 			return builder.build(src)
 		}
@@ -2890,7 +3020,172 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
-	private fun goToNextActivity() {
+
+	private fun runDebugAllPaths() {
+		val dataDocs = currentSession.dataDocs
+		if (dataDocs.isNullOrBlank()) {
+			showStatus(currentStage, "Paste DataDocs first (Activities debugger -> Open DataDocs -> Input text).")
+			return
+		}
+
+		val mode = currentSession.mode
+		val selectedActivityPath = when (mode) {
+			TransformMode.XSLT -> currentSession.xsltPath
+			TransformMode.BR -> currentSession.brPath
+			TransformMode.ST,
+			TransformMode.SV,
+			TransformMode.PR,
+			TransformMode.PROCEDURE_RETURN,
+			TransformMode.WA,
+			TransformMode.FM,
+			TransformMode.OTHER -> currentSession.otherActivityPath
+		} ?: run {
+			showStatus(currentStage, "No activity selected.")
+			return
+		}
+
+		val flowDir = selectedActivityPath.parent?.parent ?: run {
+			showStatus(currentStage, "Cannot resolve flow directory for:\n$selectedActivityPath")
+			return
+		}
+
+		val layoutFile = flowDir.resolve("Layout.xml")
+		if (!Files.exists(layoutFile)) {
+			showStatus(currentStage, "Layout.xml not found:\n$layoutFile")
+			return
+		}
+
+		val layout = try {
+			XmlMapper().readValue(layoutFile.toFile(), DiagramLayout::class.java)
+		} catch (e: Exception) {
+			showStatus(currentStage, "Failed to parse Layout.xml:\n${'$'}{e.message}")
+			return
+		}
+
+		val elements = layout.elements?.diagramElements.orEmpty()
+		val uidToName: Map<String, String> = elements
+			.mapNotNull { e ->
+				val uid = e.uid
+				if (uid.isNullOrBlank()) null else uid to (e.reference ?: uid)
+			}
+			.toMap()
+
+		val nameToUid = LinkedHashMap<String, String>().apply {
+			uidToName.forEach { (uid, name) -> if (!containsKey(name)) this[name] = uid }
+		}
+
+		val startName = selectedActivityPath.parent?.fileName?.toString()
+		val startUid = startName?.let { nameToUid[it] } ?: run {
+			showStatus(currentStage, "Cannot map start activity to Layout.xml element: ${'$'}startName")
+			return
+		}
+
+		val edges = FlowGraphExtractor.extractDirectedEdges(layout)
+		val adj = LinkedHashMap<String, MutableList<String>>()
+
+
+		fun edgeFromUid(e: Any): String? {
+			val c = e.javaClass
+			val getterNames = listOf("getFromUid", "getFrom", "getSourceUid", "getSrcUid", "getA", "getLeft")
+			for (g in getterNames) {
+				val m = c.methods.firstOrNull { it.name == g && it.parameterCount == 0 } ?: continue
+				val v = runCatching { m.invoke(e) }.getOrNull() ?: continue
+				if (v is String && v.isNotBlank()) return v
+			}
+			return null
+		}
+
+		fun edgeToUid(e: Any): String? {
+			val c = e.javaClass
+			val getterNames = listOf("getToUid", "getTo", "getTargetUid", "getDstUid", "getB", "getRight")
+			for (g in getterNames) {
+				val m = c.methods.firstOrNull { it.name == g && it.parameterCount == 0 } ?: continue
+				val v = runCatching { m.invoke(e) }.getOrNull() ?: continue
+				if (v is String && v.isNotBlank()) return v
+			}
+			return null
+		}
+
+		edges.forEach { e ->
+			val a = edgeFromUid(e) ?: return@forEach
+			val b = edgeToUid(e) ?: return@forEach
+			adj.computeIfAbsent(a) { mutableListOf() }.add(b)
+			adj.computeIfAbsent(b) { mutableListOf() }
+		}
+
+		// Синки: вершины без исходящих дуг
+		val sinks = adj.filter { it.value.isEmpty() }.keys.toList()
+		if (sinks.isEmpty()) {
+			showStatus(currentStage, "No terminal nodes (sinks) found in Layout.xml graph.")
+			return
+		}
+
+		// Все простые пути start -> sinks (без повторов вершин). Циклы обрезаем.
+		val maxPaths = 2000
+		val maxDepth = 200
+		val allRoutes = ArrayList<List<String>>()
+
+		fun dfs(u: String, path: MutableList<String>, used: MutableSet<String>) {
+			if (allRoutes.size >= maxPaths) return
+			if (path.size > maxDepth) return
+			if (u in sinks) {
+				allRoutes.add(path.toList())
+				return
+			}
+			val nexts = adj[u].orEmpty()
+			nexts.forEach { v ->
+				if (v in used) return@forEach
+				used.add(v)
+				path.add(v)
+				dfs(v, path, used)
+				path.removeAt(path.lastIndex)
+				used.remove(v)
+			}
+		}
+
+		dfs(startUid, mutableListOf(startUid), mutableSetOf(startUid))
+
+		if (allRoutes.isEmpty()) {
+			showStatus(currentStage, "No routes found from ${'$'}startName.")
+			return
+		}
+
+
+		// Подготовить последовательность шагов (routeIndex, stepIndex, propsPath)
+		data class Step(val routeIdx: Int, val stepIdx: Int, val totalSteps: Int, val props: Path?)
+
+		val steps = ArrayList<Step>()
+		allRoutes.forEachIndexed { rIdx, route ->
+			val total = route.size
+			route.forEachIndexed { sIdx, uid ->
+				val name = uidToName[uid]
+				val props = name?.let { flowDir.resolve(it).resolve("Properties.xml") }
+				steps.add(Step(rIdx + 1, sIdx + 1, total, props))
+			}
+		}
+
+		// Анимация пробежки по всем путям
+		val timeline = Timeline()
+		timeline.cycleCount = steps.size
+		val frameMs = 180.0
+
+		var i = 0
+		timeline.keyFrames.add(KeyFrame(Duration.millis(frameMs), javafx.event.EventHandler {
+			val st = steps[i]
+			currentSession.debugLastExitName.set("route ${'$'}{st.routeIdx}/${'$'}{allRoutes.size}, step ${'$'}{st.stepIdx}/${'$'}{st.totalSteps}")
+			currentSession.debugCurrentActivityProps.set(st.props)
+			i++
+		}))
+
+		timeline.setOnFinished {
+			showStatus(currentStage, "Run debug finished. Routes: ${'$'}{allRoutes.size}")
+		}
+
+		timeline.playFromStart()
+	}
+
+
+private fun goToNextActivity() {
 		setNextActivity(null)
 	}
 

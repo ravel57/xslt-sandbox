@@ -84,7 +84,7 @@ class RouteFinder(
 			it.setOnCloseRequest { diagramStage = null }
 		}).apply { title = "Flow diagram: ${flowDir.fileName}" }
 
-		stage.scene = Scene(buildDiagramRoot(flowDir, layout, currentActivityName), sceneWidth, sceneHeight)
+		stage.scene = Scene(buildDiagramRoot(flowDir, layout, currentActivityName, stage), sceneWidth, sceneHeight)
 		stage.show()
 		stage.toFront()
 	}
@@ -94,7 +94,8 @@ class RouteFinder(
 	fun buildDiagramRoot(
 		flowDir: Path,
 		layout: ru.ravel.xsltsandbox.models.layout.DiagramLayout,
-		currentActivityName: String?
+		currentActivityName: String?,
+		ownerStage: Stage
 	): BorderPane {
 		val elements = layout.elements?.diagramElements.orEmpty()
 
@@ -210,6 +211,20 @@ class RouteFinder(
 
 		val buildBtn = Button("Build")
 
+		val stepBtn = Button("Step")
+		val runBtn = Button("Run debug").apply {
+			setOnAction {
+				if (currentSession.dataDocs.isNullOrBlank()) {
+					showStatus(currentStage, "DataDocs пустые — вставьте DataDocs и повторите Run debug")
+					return@setOnAction
+				}
+				currentSession.onDebugRun?.invoke()
+			}
+		}
+		val exitDbgLabel = Label().apply {
+			textProperty().bind(currentSession.debugLastExitName)
+		}
+
 		val workspace = Pane().apply {
 			prefWidth = 1600.0
 			prefHeight = 1000.0
@@ -228,7 +243,50 @@ class RouteFinder(
 		val blocks = mutableMapOf<String, DiagramBlockView>()
 		val connections = mutableListOf<DiagramConnView>()
 
+		var highlightedUid: String? = null
+
+		fun clearHighlight() {
+			highlightedUid?.let { uid ->
+				blocks[uid]?.highlight = false
+			}
+			highlightedUid = null
+		}
+
+		fun highlightUid(uid: String?) {
+			if (uid == null) return
+			if (highlightedUid == uid) return
+			// снять прошлую подсветку
+			clearHighlight()
+			// подсветить новую
+			blocks[uid]?.highlight = true
+			highlightedUid = uid
+		}
+
+		fun centerOnUid(uid: String?) {
+			val b = uid?.let { blocks[it] } ?: return
+			Platform.runLater {
+				// гарантируем, что layout уже посчитан
+				val bounds = b.boundsInParent
+				val vp = scroll.viewportBounds
+				val contentW = workspace.prefWidth
+				val contentH = workspace.prefHeight
+				val targetX = bounds.minX + bounds.width / 2.0 - vp.width / 2.0
+				val targetY = bounds.minY + bounds.height / 2.0 - vp.height / 2.0
+				val hxDen = (contentW - vp.width).coerceAtLeast(1.0)
+				val vyDen = (contentH - vp.height).coerceAtLeast(1.0)
+				scroll.hvalue = (targetX / hxDen).coerceIn(0.0, 1.0)
+				scroll.vvalue = (targetY / vyDen).coerceIn(0.0, 1.0)
+			}
+		}
+
+		fun highlightByActivityName(name: String?) {
+			val uid = name?.let { nameToUid[it] }
+			highlightUid(uid)
+			centerOnUid(uid)
+		}
+
 		fun clearDiagram() {
+			clearHighlight()
 			linesLayer.children.clear()
 			blocksLayer.children.clear()
 			blocks.clear()
@@ -327,7 +385,31 @@ class RouteFinder(
 				conn.onPicked = { picked ->
 					connections.forEach { it.selected = (it === picked) }
 				}
-				linesLayer.children.addAll(conn.path, conn.pick, conn.arrow)
+				conn.onOpenDataDocs = { picked ->
+					val key = DocSession.DebugEdgeKey(
+						from = picked.fromName,
+						exit = picked.exit?.takeIf { it.isNotBlank() },
+						to = picked.toName
+					)
+					val saved = currentSession.debugDocsByEdge[key]
+					val title = buildString {
+						append("DataDocs")
+						if (!picked.exit.isNullOrBlank()) append(" [").append(picked.exit).append("]")
+						append(": ").append(picked.fromName).append(" -> ").append(picked.toName)
+					}
+					val text = if (saved != null) {
+						buildString {
+							append("=== IN ===\n")
+							append(saved.inDocs)
+							append("\n\n=== OUT ===\n")
+							append(saved.outDocs)
+						}
+					} else {
+						currentSession.dataDocs ?: ""
+					}
+					currentSession.onOpenDataDocsViewer?.invoke(ownerStage, title, text)
+				}
+				linesLayer.children.addAll(conn.path, conn.pick, conn.arrow, conn.label)
 				connMap[key] = conn
 				connections.add(conn)
 				conn.update()
@@ -342,6 +424,9 @@ class RouteFinder(
 				putConn(fromUid = e.fromUid, toUid = e.toUid, rawExitName = e.exitLabel(), isCycle = true)
 			}
 
+			// Подсветка текущей активности (debugger)
+			val dbgName = currentSession.debugActivityNameOf(currentSession.debugCurrentActivityProps.get())
+			highlightByActivityName(dbgName ?: currentActivityName)
 		}
 
 
@@ -378,17 +463,26 @@ class RouteFinder(
 		}
 
 		buildBtn.setOnAction { rebuild() }
+		stepBtn.setOnAction { currentSession.onDebugStep?.invoke() }
 		val topBar = HBox(
 			10.0,
 			Label("Start:"), startCb,
 			Label("End:"), endCb,
-			buildBtn
+			buildBtn,
+			stepBtn,
+			runBtn,
+			Label("Exit:"),
+			exitDbgLabel
 		).apply {
 			padding = Insets(10.0)
 			alignment = Pos.CENTER_LEFT
 		}
 
 		val header = VBox(4.0, titleLabel).apply { padding = Insets(10.0) }
+
+		Platform.runLater {
+			highlightByActivityName(currentSession.debugActivityNameOf(currentSession.debugCurrentActivityProps.get()) ?: currentActivityName)
+		}
 
 		return BorderPane().apply {
 			top = VBox(topBar, header)

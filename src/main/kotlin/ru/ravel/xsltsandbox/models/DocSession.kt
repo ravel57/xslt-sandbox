@@ -10,7 +10,9 @@ import ru.ravel.xsltsandbox.models.bizrule.Connective
 import ru.ravel.xsltsandbox.models.bizrule.Quantifier
 import java.nio.charset.Charset
 import java.nio.file.Path
-
+import javafx.beans.property.SimpleObjectProperty
+import javafx.beans.property.SimpleStringProperty
+import javafx.stage.Stage
 
 data class DocSession(
 	val tab: Tab,
@@ -39,12 +41,29 @@ data class DocSession(
 	var mappingPropertyFile: Path? = null,
 ) {
 
+	val debugCurrentActivityProps = SimpleObjectProperty<Path?>(null)
+	val debugLastExitName = SimpleStringProperty(null)
+	var onDebugStep: (() -> Unit)? = null
+	var onDebugRun: (() -> Unit)? = null
+	var onOpenDataDocsViewer: ((Stage, String, String) -> Unit)? = null
+
+	data class DebugEdgeKey(val from: String, val exit: String?, val to: String)
+	data class DebugEdgeDocs(val inDocs: String, val outDocs: String)
+	val debugDocsByEdge: MutableMap<DebugEdgeKey, DebugEdgeDocs> = LinkedHashMap()
+
+	fun debugActivityNameOf(p: Path?): String? {
+		if (p == null) return null
+		return p.parent?.fileName?.toString()
+	}
+
+
 	override fun equals(other: Any?): Boolean {
 		if (this === other) return true
 		if (javaClass != other?.javaClass) return false
 		other as DocSession
 		return tab == other.tab
 	}
+
 
 	override fun hashCode(): Int {
 		return tab.hashCode()

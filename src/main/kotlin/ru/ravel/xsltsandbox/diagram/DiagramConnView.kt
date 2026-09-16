@@ -52,6 +52,11 @@ class DiagramConnView(
 	private val directionThreshold = 4.0
 
 	var onPicked: ((DiagramConnView) -> Unit)? = null
+	var onOpenDataDocs: ((DiagramConnView) -> Unit)? = null
+
+	val fromName: String get() = from.name
+	val toName: String get() = to.name
+	val exit: String? get() = exitName
 
 	val path: Path = Path().apply {
 		fill = Color.TRANSPARENT
@@ -182,12 +187,17 @@ class DiagramConnView(
 		// Двойной клик — сброс ручных правок
 		pick.addEventHandler(MouseEvent.MOUSE_CLICKED) { e ->
 			if (e.button == MouseButton.PRIMARY && e.clickCount == 2) {
-				manualOutX = null
-				manualInX = null
-				manualMidY = null
 				selected = true
 				onPicked?.invoke(this)
-				update()
+				if (e.isShiftDown) {
+					manualOutX = null
+					manualInX = null
+					manualMidY = null
+					update()
+				} else {
+					onOpenDataDocs?.invoke(this)
+				}
+
 				e.consume()
 			}
 		}

@@ -6,15 +6,12 @@ plugins {
 	id 'java'
 	id 'application'
 	id 'org.jetbrains.kotlin.jvm' version '1.9.23'
-	id 'org.javamodularity.moduleplugin' version '1.8.12'
-	id 'org.openjfx.javafxplugin' version '0.0.13'
-	id 'org.beryx.jlink' version '2.25.0'
-	id 'com.github.johnrengelman.shadow' version '7.1.2'
+	id 'org.openjfx.javafxplugin' version '0.1.0'
 	id 'com.gluonhq.gluonfx-gradle-plugin' version '1.0.26'
 }
 
 group = 'ru.ravel'
-version = '0.5.1'
+version = '0.6.1'
 
 repositories {
 	mavenCentral()
@@ -22,20 +19,17 @@ repositories {
 
 dependencies {
 	implementation 'org.jetbrains.kotlin:kotlin-stdlib:1.9.23'
-	implementation "org.fxmisc.richtext:richtextfx:0.10.9"
-	implementation "net.sf.saxon:Saxon-HE:12.3"
-	implementation "org.openjfx:javafx-controls:17"
+	implementation 'net.sf.saxon:Saxon-HE:12.3'
 
-	implementation "com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.17"
-	implementation "com.fasterxml.jackson.module:jackson-module-kotlin:2.17.0"
-	implementation "org.ccil.cowan.tagsoup:tagsoup:1.2.1"
+	implementation 'com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.17'
+	implementation 'com.fasterxml.jackson.module:jackson-module-kotlin:2.17.0'
+	implementation 'org.ccil.cowan.tagsoup:tagsoup:1.2.1'
 
-	implementation "org.kordamp.ikonli:ikonli-javafx:12.3.0"
-	implementation "org.kordamp.ikonli:ikonli-fontawesome5-pack:12.3.0"
-	implementation "org.kordamp.ikonli:ikonli-materialdesign2-pack:12.3.0"
+	implementation 'org.kordamp.ikonli:ikonli-javafx:12.3.0'
+	implementation 'org.kordamp.ikonli:ikonli-fontawesome5-pack:12.3.0'
+	implementation 'org.kordamp.ikonli:ikonli-materialdesign2-pack:12.3.0'
 
 	implementation 'org.fxmisc.richtext:richtextfx:0.11.5'
-
 	implementation 'org.apache.commons:commons-text:1.14.0'
 
 	testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.0'
@@ -43,7 +37,6 @@ dependencies {
 }
 
 java {
-	// Устанавливаем совместимость Java-компиляции на версию 17
 	sourceCompatibility = JavaVersion.VERSION_17
 	targetCompatibility = JavaVersion.VERSION_17
 	toolchain {
@@ -52,7 +45,6 @@ java {
 }
 
 kotlin {
-	// Используем JVM-toolchain 17 и для Kotlin
 	jvmToolchain {
 		languageVersion.set(JavaLanguageVersion.of(17))
 	}
@@ -60,59 +52,29 @@ kotlin {
 
 javafx {
 	version = '21'
-	modules = ['javafx.controls', 'javafx.fxml']
+	modules = ['javafx.base', 'javafx.graphics', 'javafx.controls', 'javafx.fxml']
 }
 
 application {
-	mainModule = 'ru.ravel.xsltsandbox'
 	mainClass = 'ru.ravel.xsltsandbox.XmlXsltValidatorAppKt'
+	applicationName = 'XSLTSandbox'
 }
 
-// Компиляция Kotlin-классов в тот же каталог, что и Java
 tasks.withType(KotlinCompile).configureEach {
 	kotlinOptions {
 		jvmTarget = '17'
+		languageVersion = '1.9'
 	}
-	destinationDirectory.set(
-			tasks.named('compileJava').get().destinationDirectory
-	)
 }
 
 test {
 	useJUnitPlatform()
 }
 
-jlink {
-	imageZip = file("${buildDir}/distributions/app-${javafx.platform.classifier}.zip")
-	options = [
-			'--strip-debug',
-			'--compress', '2',
-			'--no-header-files',
-			'--no-man-pages'
-	]
-	launcher {
-		name = 'app'
-	}
-}
-
-jlinkZip {
-	group = 'distribution'
-}
-
 jar {
 	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-	from(sourceSets.main.output)
-	from {
-		configurations.runtimeClasspath
-				.filter { it.name.endsWith('.jar') && !it.name.startsWith('javafx-') }
-				.collect { zipTree(it) }
-	}
-	exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'META-INF/*.EC'
-
 	manifest {
-		attributes(
-				'Main-Class': 'ru.ravel.xsltsandbox.XmlXsltValidatorAppKt'
-		)
+		attributes('Main-Class': 'ru.ravel.xsltsandbox.XmlXsltValidatorAppKt')
 	}
 }
 
@@ -124,15 +86,102 @@ sourceSets {
 	}
 }
 
-kotlin {
-	sourceSets["main"].resources.srcDir("src/main/resources")
+tasks.named('processResources', Copy) {
+	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
 
-//tasks.named('clean', Delete) {
-//	delete = delete.filter {
-//		!it.toString().contains("${buildDir}/gluonfx")
-//	}
-//}
+/*
+ * jpackage packaging for the non-modular application.
+ * This deliberately does not use org.beryx.jlink/runtime: jpackage builds
+ * the application image and its private Java runtime itself.
+ */
+def jpackageInputDir = layout.buildDirectory.dir('jpackage/input')
+def jpackageOutputDir = layout.buildDirectory.dir('installer')
+def winIcon = file('src/main/resources/icons/XSLTSandbox.ico')
+
+def jpackageExecutableProvider = javaToolchains.launcherFor {
+	languageVersion = JavaLanguageVersion.of(17)
+}.map { launcher ->
+	def ext = System.getProperty('os.name').toLowerCase().contains('win') ? '.exe' : ''
+	new File(launcher.metadata.installationPath.asFile, "bin/jpackage${ext}")
+}
+
+tasks.register('prepareJpackageInput', Copy) {
+	dependsOn tasks.named('jar')
+
+	into(jpackageInputDir)
+	from(tasks.named('jar'))
+	from(configurations.runtimeClasspath)
+
+	doFirst {
+		delete(jpackageInputDir.get().asFile)
+	}
+}
+
+tasks.register('jpackageImage', Exec) {
+	group = 'distribution'
+	description = 'Builds a portable Windows app-image with a bundled JVM.'
+	dependsOn tasks.named('prepareJpackageInput')
+
+	doFirst {
+		def outputDir = jpackageOutputDir.get().asFile
+		def imageDir = new File(outputDir, 'XSLTSandbox')
+		delete(imageDir)
+		outputDir.mkdirs()
+
+		def jpArgs = [
+			'--type', 'app-image',
+			'--name', 'XSLTSandbox',
+			'--dest', outputDir.absolutePath,
+			'--input', jpackageInputDir.get().asFile.absolutePath,
+			'--main-jar', tasks.named('jar').get().archiveFileName.get(),
+			'--main-class', 'ru.ravel.xsltsandbox.XmlXsltValidatorAppKt',
+			'--app-version', project.version.toString()
+		]
+
+		if (winIcon.exists()) {
+			jpArgs += ['--icon', winIcon.absolutePath]
+		} else {
+			logger.warn("jpackage icon not found: ${winIcon.absolutePath}")
+		}
+
+		executable(jpackageExecutableProvider.get().absolutePath)
+		args(jpArgs)
+	}
+}
+
+// Diagnostic variant. It creates a separate app image with a console so that
+// startup exceptions are visible instead of only the generic Windows dialog.
+tasks.register('jpackageImageDebug', Exec) {
+	group = 'distribution'
+	description = 'Builds a diagnostic portable app-image with Windows console enabled.'
+	dependsOn tasks.named('prepareJpackageInput')
+
+	doFirst {
+		def outputDir = layout.buildDirectory.dir('installer-debug').get().asFile
+		def imageDir = new File(outputDir, 'XSLTSandboxDebug')
+		delete(imageDir)
+		outputDir.mkdirs()
+
+		def jpArgs = [
+			'--type', 'app-image',
+			'--name', 'XSLTSandboxDebug',
+			'--dest', outputDir.absolutePath,
+			'--input', jpackageInputDir.get().asFile.absolutePath,
+			'--main-jar', tasks.named('jar').get().archiveFileName.get(),
+			'--main-class', 'ru.ravel.xsltsandbox.XmlXsltValidatorAppKt',
+			'--app-version', project.version.toString(),
+			'--win-console'
+		]
+
+		if (winIcon.exists()) {
+			jpArgs += ['--icon', winIcon.absolutePath]
+		}
+
+		executable(jpackageExecutableProvider.get().absolutePath)
+		args(jpArgs)
+	}
+}
 
 gluonfx {
 	graalvmHome = 'C:/Program Files/Java/graalvm-jdk-24.0.1+9.1'
@@ -143,30 +192,6 @@ gluonfx {
 	verbose = true
 	enableSwRendering = false
 	runtimeArgs = [
-			"-agentlib:native-image-agent=config-output-dir=${buildDir}/agent-output"
-//			, '--auto-fallback'
+		"-agentlib:native-image-agent=config-output-dir=${buildDir}/agent-output"
 	]
-}
-
-afterEvaluate {
-	tasks.named('mergeClasses') {
-		mustRunAfter tasks.named('compileTestKotlin')
-	}
-}
-
-compileKotlin {
-	kotlinOptions {
-		languageVersion = "1.9"
-	}
-}
-
-tasks.named("processResources", Copy) {
-	doFirst {
-		println "Looking for xml‑highlighting.css in resources:"
-		// source — это FileTree всех ресурсов, которые будут скопированы
-		source.files.findAll { it.name == "xml‑highlighting.css" }
-				.each { println "  -> " + it.absolutePath }
-	}
-	// после отладки можно вернуть стратегию обратно на EXCLUDE или WARN
-	duplicatesStrategy = DuplicatesStrategy.EXCLUDE
 }
