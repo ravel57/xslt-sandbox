@@ -2,6 +2,9 @@ package ru.ravel.xsltsandbox.diagram
 
 import com.fasterxml.jackson.dataformat.xml.XmlMapper
 import javafx.application.Platform
+import javafx.collections.FXCollections
+import javafx.collections.ObservableList
+import javafx.collections.transformation.FilteredList
 import javafx.geometry.Insets
 import javafx.geometry.Pos
 import javafx.scene.Group
@@ -9,34 +12,20 @@ import javafx.scene.Scene
 import javafx.scene.control.Button
 import javafx.scene.control.ComboBox
 import javafx.scene.control.Label
-import javafx.scene.control.ListView
 import javafx.scene.control.ScrollPane
-import javafx.geometry.Bounds
-import javafx.geometry.BoundingBox
-import javafx.geometry.Point2D
-import javafx.scene.shape.LineTo
-import javafx.scene.shape.MoveTo
-import javafx.scene.shape.Path as FxPath
 import javafx.scene.layout.BorderPane
 import javafx.scene.layout.HBox
 import javafx.scene.layout.Pane
 import javafx.scene.layout.VBox
-import javafx.scene.paint.Color
-import javafx.scene.shape.Line
-import javafx.scene.shape.Polygon
 import javafx.stage.Stage
-import ru.ravel.xsltsandbox.XmlXsltValidatorApp.Companion.showStatus
 import ru.ravel.xsltsandbox.models.DocSession
 import ru.ravel.xsltsandbox.models.TransformMode
-import java.nio.file.Path
-import kotlin.io.path.exists
 import ru.ravel.xsltsandbox.models.layout.DiagramLayout
-import javafx.collections.FXCollections
-import javafx.collections.ObservableList
-import javafx.collections.transformation.FilteredList
-import javafx.scene.shape.Circle
-import javafx.scene.text.Text
+import ru.ravel.xsltsandbox.ui.Dialogs.showStatus
+import java.nio.file.Path
 import java.util.function.Predicate
+import kotlin.io.path.exists
+
 
 class RouteFinder(
 	private val currentStage: Stage,

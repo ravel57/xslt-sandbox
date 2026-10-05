@@ -38,6 +38,7 @@ class ShortestRoutesFinder(
 						pred.getOrPut(v) { mutableListOf() }.add(e)
 						q.add(v)
 					}
+
 					nd == old -> {
 						pred.getOrPut(v) { mutableListOf() }.add(e)
 					}

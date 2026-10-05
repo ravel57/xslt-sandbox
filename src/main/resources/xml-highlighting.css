@@ -64,9 +64,78 @@
 }
 
 .fold-glyph {
-    -fx-font-size: 10px;
+    -fx-font-size: 11px;
     -fx-background-color: transparent;
-    -fx-text-fill: #1b8cef; /* как подсветка тегов */
+    -fx-text-fill: #8a8a8a;
     -fx-alignment: center;
     -fx-padding: 0;
+}
+
+.fold-glyph:hover {
+    -fx-text-fill: #1b8cef;
+    -fx-background-color: rgba(27, 140, 239, 0.15);
+    -fx-background-radius: 3;
+}
+
+/* Свёрнутая ветка: настоящий текст строки скрыт, вместо него плашка в гуттере */
+.fold-start {
+    /* крошечный шрифт скрытого текста не должен сжимать строку по высоте */
+    -fx-min-height: 1.4em;
+    -fx-pref-height: 1.4em;
+}
+
+.fold-start .text {
+    -fx-fill: transparent !important;
+    /* скрытый текст не должен растягивать горизонтальную прокрутку */
+    -fx-font-size: 0.01px !important;
+}
+
+.fold-chip-text {
+    -fx-font-family: monospace;
+}
+
+.fold-chip-text.tag {
+    -fx-fill: #1b8cef;
+}
+
+.fold-chip-text.bracket {
+    -fx-fill: #1b8cef;
+}
+
+.fold-chip {
+    -fx-font-family: monospace;
+    -fx-text-fill: #606060;
+    -fx-background-color: #dfe1e5;
+    -fx-background-radius: 3;
+    -fx-padding: 0 3 0 3;
+}
+
+/* Дерево бизнес-правила */
+.br-connective { -fx-fill: #8e44ad; -fx-font-weight: bold; }
+.br-quantifier { -fx-fill: #d35400; -fx-font-weight: bold; }
+.br-variable { -fx-fill: #1b6fc2; }
+.br-operator { -fx-fill: #7f8c8d; -fx-font-weight: bold; }
+.br-string { -fx-fill: #2e8b57; }
+.br-number { -fx-fill: #b8860b; }
+.br-xpath { -fx-fill: #a0522d; }
+.br-keyword { -fx-fill: #555555; -fx-font-weight: bold; }
+.tree-cell:filled:selected .br-text { -fx-fill: white; }
+
+/* Свёрнутая строка: скрытый настоящий текст не должен оставлять заливку (парный тег, выделение) */
+.fold-start .text {
+    -rtfx-background-color: transparent !important;
+}
+
+.fold-start .selection {
+    -fx-fill: transparent !important;
+}
+
+/* Левое поле (маркер сворачивания + номер строки) непрозрачное: при горизонтальной прокрутке текст не просвечивает */
+.fold-gutter {
+    -fx-background-color: -fx-control-inner-background;
+}
+/* Скрытые (свёрнутые) строки остаются в списке отрисовки и считаются в ширине горизонтальной прокрутки.
+   Крошечный шрифт делает их практически нулевой ширины. */
+.collapse .text {
+    -fx-font-size: 0.01px !important;
 }

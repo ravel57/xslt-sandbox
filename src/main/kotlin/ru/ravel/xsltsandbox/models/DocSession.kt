@@ -3,6 +3,8 @@ package ru.ravel.xsltsandbox.models
 import javafx.scene.canvas.Canvas
 import javafx.scene.control.Label
 import javafx.scene.control.Tab
+import javafx.scene.control.Tooltip
+import kotlin.io.path.absolutePathString
 import javafx.scene.control.TreeView
 import javafx.scene.layout.VBox
 import org.fxmisc.richtext.CodeArea
@@ -49,7 +51,23 @@ data class DocSession(
 
 	data class DebugEdgeKey(val from: String, val exit: String?, val to: String)
 	data class DebugEdgeDocs(val inDocs: String, val outDocs: String)
+
 	val debugDocsByEdge: MutableMap<DebugEdgeKey, DebugEdgeDocs> = LinkedHashMap()
+
+	fun updateTabTitle() {
+		when {
+			(xsltPath != null) -> {
+				tab.text = "${xsltPath?.parent?.fileName} / ${xsltPath?.fileName}"
+				tab.tooltip = Tooltip(xsltPath?.absolutePathString())
+			}
+
+			(brPath != null) -> {
+				tab.text = "${brPath?.parent?.fileName} / ${brPath?.fileName}"
+				tab.tooltip = Tooltip(brPath?.absolutePathString())
+			}
+		}
+	}
+
 
 	fun debugActivityNameOf(p: Path?): String? {
 		if (p == null) return null

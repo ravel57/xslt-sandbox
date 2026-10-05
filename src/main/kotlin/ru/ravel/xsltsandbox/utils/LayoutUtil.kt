@@ -40,13 +40,13 @@ class LayoutUtil(
 		val nextActivityUid = diagramLayout.connections?.diagramConnections
 			?.firstOrNull { conn ->
 				when (mode) {
-					TransformMode.XSLT, TransformMode.SV -> {
+					TransformMode.XSLT, TransformMode.SV, TransformMode.OTHER -> {
 						conn.endPoints?.points?.any {
 							it.elementRef == currentActivityUid && it.exitPointRef == "Completed"
 						} == true
 					}
 
-					TransformMode.BR, TransformMode.PROCEDURE_RETURN, TransformMode.WA, TransformMode.FM -> {
+					TransformMode.BR, TransformMode.PROCEDURE_RETURN, TransformMode.PR, TransformMode.WA, TransformMode.FM -> {
 						conn.endPoints?.points?.any {
 							it.elementRef == currentActivityUid && it.exitPointRef?.lowercase() == exitName?.lowercase()
 						} == true
@@ -56,10 +56,6 @@ class LayoutUtil(
 						conn.endPoints?.points?.any {
 							it.elementRef == currentActivityUid && it.exitPointRef == exitName
 						} == true
-					}
-
-					TransformMode.PR, TransformMode.OTHER -> {
-						TODO()
 					}
 				}
 			}
