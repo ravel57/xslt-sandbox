@@ -423,6 +423,39 @@ class XmlXsltValidatorApp : Application() {
 					continue
 				}
 
+				"--input-properties-path" -> {
+					val file = File(args.getOrNull(index + 1).toString())
+					val mapper = xmlMapper
+					val bizRule = mapper.readValue(file, BizRule::class.java)
+					currentSession.brPath = file.toPath()
+					currentSession.mappingPropertyFile = file.toPath().parent.resolve("Properties.xml")
+					currentSession.updateTabTitle()
+					val innerXml = StringEscapeUtils.unescapeXml(bizRule.xmlRule.value)
+
+					val rootNode: Any = if (innerXml.trim().startsWith("<Quantifier")) {
+						mapper.readValue(innerXml, Quantifier::class.java)
+					} else {
+						mapper.readValue(innerXml, Connective::class.java)
+					}
+
+					when (rootNode) {
+						is Quantifier -> {
+							currentSession.brRootQuant = rootNode
+							currentSession.brRoot = null
+							currentSession.brTree?.root = toTreeItem(rootNode)
+						}
+
+						is Connective -> {
+							currentSession.brRoot = rootNode
+							currentSession.brRootQuant = null
+							currentSession.brTree?.root = toTreeItem(rootNode)
+						}
+					}
+					currentSession.brTree?.isShowRoot = true
+					expandAll(currentSession.brTree?.root ?: return)
+					continue
+				}
+
 				"--input-data-path" -> {
 					val file = File(args.getOrNull(index + 1).toString())
 					loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xmlArea) {        // TODO вынести в функцию
