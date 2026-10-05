@@ -112,6 +112,7 @@ class XmlXsltValidatorApp : Application() {
 			System.err.println("Failed to load application icon: ${ex.message}")
 		}
 	}
+
 	private val xmlMapper = XmlMapper().registerKotlinModule()
 
 	private lateinit var tabPane: TabPane
@@ -132,7 +133,29 @@ class XmlXsltValidatorApp : Application() {
 	private val watchDirs = mutableSetOf<Path>()
 	private lateinit var currentStage: Stage
 	private var diagramStage: Stage? = null
-	private val configPath: Path = Paths.get(System.getenv("APPDATA"), "xslt-sandbox", "config.json")
+	private val configPath: Path = run {
+		val os = System.getProperty("os.name").lowercase()
+		val configDir = when {
+			os.contains("win") -> Paths.get(
+				System.getenv("APPDATA"),
+				"xslt-sandbox"
+			)
+
+			os.contains("mac") -> Paths.get(
+				System.getProperty("user.home"),
+				"Library",
+				"Application Support",
+				"xslt-sandbox"
+			)
+
+			else -> Paths.get(
+				System.getenv("XDG_CONFIG_HOME")
+					?: Paths.get(System.getProperty("user.home"), ".config").toString(),
+				"xslt-sandbox"
+			)
+		}
+		configDir.resolve("config.json")
+	}
 	private lateinit var config: AppConfig
 	private var disableSyntaxHighlighting = false
 	private val foldedParagraphs = mutableSetOf<Int>()
@@ -386,6 +409,29 @@ class XmlXsltValidatorApp : Application() {
 		// восстановим последнюю сессию из config (если нужно)
 		restorePreviouslyOpenedFiles(first)
 		startWatchThread()
+
+		val args = parameters.raw
+		for (index in 0 until args.size) {
+			when (args.getOrNull(index).toString()) {
+				"--input-xslt-path" -> {
+					val file = File(args.getOrNull(index + 1).toString())
+					loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xsltArea) { path ->        // TODO вынести в функцию
+						currentSession.xsltPath = path
+						currentSession.mappingPropertyFile = path.parent.resolve("Properties.xml")
+						currentSession.updateTabTitle()
+					}
+					continue
+				}
+
+				"--input-data-path" -> {
+					val file = File(args.getOrNull(index + 1).toString())
+					loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xmlArea) {        // TODO вынести в функцию
+						currentSession.xmlPath = it
+					}
+					continue
+				}
+			}
+		}
 	}
 
 
@@ -416,7 +462,7 @@ class XmlXsltValidatorApp : Application() {
 			setOnAction {
 				val file = createChooser("Open XML…", currentSession.xmlPath, "XML Files (*.xml)", "*.xml")
 					.showOpenDialog(currentStage) ?: return@setOnAction
-				loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xmlArea) {
+				loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xmlArea) {        // TODO вынести в функцию
 					currentSession.xmlPath = it
 				}
 			}
@@ -431,7 +477,7 @@ class XmlXsltValidatorApp : Application() {
 					"*.xslt"
 				)
 					.showOpenDialog(currentStage) ?: return@setOnAction
-				loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xsltArea) { path ->
+				loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xsltArea) { path ->        // TODO вынести в функцию
 					currentSession.xsltPath = path
 					currentSession.mappingPropertyFile = path.parent.resolve("Properties.xml")
 					currentSession.updateTabTitle()
@@ -1956,37 +2002,36 @@ class XmlXsltValidatorApp : Application() {
 		}
 	}
 
-fun showDataDocsViewer(owner: Stage, title: String, text: String) {
-    val area = CodeArea().apply {
-        replaceText(text)
-        isEditable = false
-    }
-    // Номера строк + сворачивание XML-веток
-    installFolding(area)
+	fun showDataDocsViewer(owner: Stage, title: String, text: String) {
+		val area = CodeArea().apply {
+			replaceText(text)
+			isEditable = false
+		}
+		// Номера строк + сворачивание XML-веток
+		installFolding(area)
 
-    val stage = Stage().apply {
-        initOwner(owner)
-        initModality(Modality.NONE)
-        this.title = title
-    }
+		val stage = Stage().apply {
+			initOwner(owner)
+			initModality(Modality.NONE)
+			this.title = title
+		}
 
-    // Ctrl+F
-    stage.addEventFilter(KeyEvent.KEY_PRESSED) { event ->
-        if (event.code == KeyCode.F && event.isControlDown) {
-            showSearchWindow(stage, area)
-            event.consume()
-        }
-    }
+		// Ctrl+F
+		stage.addEventFilter(KeyEvent.KEY_PRESSED) { event ->
+			if (event.code == KeyCode.F && event.isControlDown) {
+				showSearchWindow(stage, area)
+				event.consume()
+			}
+		}
 
-    val root = BorderPane().apply {
-        center = VirtualizedScrollPane(area)
-        padding = Insets(8.0)
-    }
-    stage.scene = Scene(root, 900.0, 700.0)
-    stage.show()
-    stage.toFront()
-}
-
+		val root = BorderPane().apply {
+			center = VirtualizedScrollPane(area)
+			padding = Insets(8.0)
+		}
+		stage.scene = Scene(root, 900.0, 700.0)
+		stage.show()
+		stage.toFront()
+	}
 
 
 	private fun allMatches(text: String, query: String): List<IntRange> {
@@ -3020,7 +3065,6 @@ fun showDataDocsViewer(owner: Stage, title: String, text: String) {
 	}
 
 
-
 	private fun runDebugAllPaths() {
 		val dataDocs = currentSession.dataDocs
 		if (dataDocs.isNullOrBlank()) {
@@ -3185,7 +3229,7 @@ fun showDataDocsViewer(owner: Stage, title: String, text: String) {
 	}
 
 
-private fun goToNextActivity() {
+	private fun goToNextActivity() {
 		setNextActivity(null)
 	}
 
@@ -3919,6 +3963,6 @@ private fun goToNextActivity() {
 	}
 }
 
-fun main() {
-	Application.launch(XmlXsltValidatorApp::class.java)
+fun main(vararg args: String) {
+	Application.launch(XmlXsltValidatorApp::class.java, *args)
 }
