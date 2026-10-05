@@ -406,16 +406,12 @@ class XmlXsltValidatorApp : Application() {
 		primaryStage.scene = scene
 		primaryStage.show()
 
-		// восстановим последнюю сессию из config (если нужно)
-		restorePreviouslyOpenedFiles(first)
-		startWatchThread()
-
 		val args = parameters.raw
 		for (index in 0 until args.size) {
 			when (args.getOrNull(index).toString()) {
-				"--input-xslt-path" -> {
+				"--input-xslt-path" -> {        // TODO вынести в функцию
 					val file = File(args.getOrNull(index + 1).toString())
-					loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xsltArea) { path ->        // TODO вынести в функцию
+					loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xsltArea) { path ->
 						currentSession.xsltPath = path
 						currentSession.mappingPropertyFile = path.parent.resolve("Properties.xml")
 						currentSession.updateTabTitle()
@@ -423,7 +419,7 @@ class XmlXsltValidatorApp : Application() {
 					continue
 				}
 
-				"--input-properties-path" -> {
+				"--input-properties-path" -> {        // TODO вынести в функцию
 					val file = File(args.getOrNull(index + 1).toString())
 					val mapper = xmlMapper
 					val bizRule = mapper.readValue(file, BizRule::class.java)
@@ -456,14 +452,20 @@ class XmlXsltValidatorApp : Application() {
 					continue
 				}
 
-				"--input-data-path" -> {
+				"--input-data-path" -> {        // TODO вынести в функцию
 					val file = File(args.getOrNull(index + 1).toString())
-					loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xmlArea) {        // TODO вынести в функцию
+					loadFileIntoAreaAsync(currentSession, file.toPath(), currentSession.xmlArea) {
 						currentSession.xmlPath = it
 					}
 					continue
 				}
 			}
+		}
+
+		// восстановим последнюю сессию из config (если нужно)
+		if (!args.contains("--no-restore")) {
+			restorePreviouslyOpenedFiles(first)
+			startWatchThread()
 		}
 	}
 
