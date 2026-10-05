@@ -1,15 +1,8 @@
 package ru.ravel.xsltsandbox.xml
 
-import java.io.StringWriter
 import javafx.geometry.Insets
 import javafx.scene.Scene
-import javafx.scene.control.Button
-import javafx.scene.control.ChoiceBox
-import javafx.scene.control.Label
-import javafx.scene.control.RadioButton
-import javafx.scene.control.ScrollPane
-import javafx.scene.control.TextField
-import javafx.scene.control.ToggleGroup
+import javafx.scene.control.*
 import javafx.scene.input.Clipboard
 import javafx.scene.input.ClipboardContent
 import javafx.scene.input.KeyCode
@@ -18,17 +11,17 @@ import javafx.scene.layout.Priority
 import javafx.scene.layout.VBox
 import javafx.stage.Modality
 import javafx.stage.Stage
-import kotlin.io.path.name
 import net.sf.saxon.s9api.Processor
 import net.sf.saxon.s9api.Serializer
 import net.sf.saxon.s9api.XdmNode
+import net.sf.saxon.s9api.XdmNodeKind
 import ru.ravel.xsltsandbox.AppContext
 import ru.ravel.xsltsandbox.models.SegMeta
-import ru.ravel.xsltsandbox.models.bizrule.XPath
 import ru.ravel.xsltsandbox.ui.Dialogs.showStatus
 import ru.ravel.xsltsandbox.xml.XPathBuilder.buildXPathWithMeta
 import ru.ravel.xsltsandbox.xml.XPathSupport.buildDocForXPath
 import ru.ravel.xsltsandbox.xml.XPathSupport.setDefaultNsFromDoc
+import java.io.StringWriter
 
 /**
  * Построение и выполнение XPath по XML и результату.
@@ -158,7 +151,7 @@ class XPathTools(private val ctx: AppContext) {
 			} else {
 				ctx.currentSession.xmlArea.text
 			}
-			val expr = xpathField.text.trim()
+			val expr = xpathField.text.trim().let { e -> if (e.length > 1) e.trimEnd('/', ' ').ifEmpty { "/" } else e }
 			if (expr.isEmpty()) {
 				showStatus(primaryStage, "Empty expression.")
 				return@setOnAction
@@ -175,7 +168,9 @@ class XPathTools(private val ctx: AppContext) {
 				val out = buildString {
 					for (item in result) {
 						when (item) {
-							is XdmNode -> {
+							is XdmNode -> if (item.nodeKind != XdmNodeKind.ELEMENT && item.nodeKind != XdmNodeKind.DOCUMENT) {
+								append(item.stringValue).append('\n')
+							} else {
 								val sw = StringWriter()
 								val serializer = proc.newSerializer(sw).apply {
 									setOutputProperty(Serializer.Property.METHOD, "xml")
