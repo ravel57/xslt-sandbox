@@ -305,16 +305,14 @@ class ActivityDebugger(
 					.distinct()
 			} ?: emptyList()
 
-			if (dataDocsOutputs.isNotEmpty() && nextActivityType in arrayOf(
-					ActivityType.DATA_MAPPING,
-					ActivityType.DATA_SOURCE
-				)
-			) {
-				ctx.currentSession.dataDocs = replaceDataDocsInString(
-					ctx.currentSession.dataDocs!!,
-					result,
-					dataDocsOutputs
-				)
+			if (dataDocsOutputs.isNotEmpty()) {
+				val before = ctx.currentSession.dataDocs!!
+				try {
+					ctx.currentSession.dataDocs = replaceDataDocsInString(before, result, dataDocsOutputs)
+					AppLog.info("выход ${selectedActivityPath.parent?.fileName} → датадоки $dataDocsOutputs: ${before.length} → ${ctx.currentSession.dataDocs!!.length} симв.")
+				} catch (e: Exception) {
+					AppLog.error("Не удалось подставить выход ${selectedActivityPath.parent?.fileName} в датадоки", e)
+				}
 			}
 		}
 
