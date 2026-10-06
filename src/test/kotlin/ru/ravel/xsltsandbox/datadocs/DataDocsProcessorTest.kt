@@ -71,4 +71,29 @@ class DataDocsProcessorTest {
 		assertEquals(allDocs, DataDocsProcessor.inputDocuments(rule.toFile(), allDocs))
 		assertEquals(allDocs, DataDocsProcessor.inputDocuments(tree.toFile(), allDocs))
 	}
+
+	private val current = "<Data><A><v>old</v></A><B><v>keep</v></B></Data>"
+
+	@Test
+	fun `output replaces only the documents it returns`() {
+		val merged = DataDocsProcessor.replaceDataDocsInString(current, "<Data><A><v>new</v></A></Data>", listOf("A"))
+
+		assertTrue("<v>new</v>" in merged && "old" !in merged && "keep" in merged, merged)
+	}
+
+	@Test
+	fun `document missing from the output is kept instead of dropped`() {
+		val merged = DataDocsProcessor.replaceDataDocsInString(current, "<Data><Other/></Data>", listOf("A"))
+
+		assertEquals(listOf("A", "B"), DataDocsProcessor.topLevelNameList(merged))
+		assertTrue("old" in merged, merged)
+	}
+
+	@Test
+	fun `output that is the document itself without Data wrapper replaces it`() {
+		val merged = DataDocsProcessor.replaceDataDocsInString(current, "<A><v>new</v></A>", listOf("A"))
+
+		assertTrue("<v>new</v>" in merged && "old" !in merged, merged)
+		assertEquals(listOf("B", "A"), DataDocsProcessor.topLevelNameList(merged))
+	}
 }

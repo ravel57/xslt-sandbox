@@ -18,6 +18,7 @@ import kotlin.io.path.name
 import ru.ravel.xsltsandbox.AppContext
 import ru.ravel.xsltsandbox.debug.DebugStep
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.inputDocuments
+import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.getDataDocsInOut
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.mergeMockWithDataDocs
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.replaceDataDocsInString
@@ -309,7 +310,18 @@ class ActivityDebugger(
 				val before = ctx.currentSession.dataDocs!!
 				try {
 					ctx.currentSession.dataDocs = replaceDataDocsInString(before, result, dataDocsOutputs)
-					AppLog.info("выход ${selectedActivityPath.parent?.fileName} → датадоки $dataDocsOutputs: ${before.length} → ${ctx.currentSession.dataDocs!!.length} симв.")
+					val returned = DataDocsProcessor.topLevelNameList(result)
+					val missing = dataDocsOutputs.filterNot { it in returned }
+					AppLog.info(
+						buildString {
+							append("выход ${selectedActivityPath.parent?.fileName} → датадоки $dataDocsOutputs: ")
+							append("${before.length} → ${ctx.currentSession.dataDocs!!.length}")
+							append("симв.; в результате XSLT: ${DataDocsProcessor.topLevelNames(result)}")
+						},
+					)
+					if (missing.isNotEmpty()) {
+						AppLog.warn("результат ${selectedActivityPath.parent?.fileName} не содержит $missing — прежние значения оставлены")
+					}
 				} catch (e: Exception) {
 					AppLog.error("Не удалось подставить выход ${selectedActivityPath.parent?.fileName} в датадоки", e)
 				}

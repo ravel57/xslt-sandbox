@@ -207,6 +207,22 @@ object DataDocsProcessor {
 	}
 
 
+	/** Имена документов верхнего уровня в [xml]; если корень сам не `Data`, а документ — его имя. Ошибка разбора — пусто. */
+	fun topLevelNameList(xml: String): List<String> = runCatching {
+		val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+			.parse(ByteArrayInputStream(xml.toByteArray(Charsets.UTF_8)))
+		val children = doc.documentElement.childNodes
+		(0 until children.length).map { children.item(it) }
+			.filter { it.nodeType == DomNode.ELEMENT_NODE }
+			.map { it.nodeName }
+			.ifEmpty { listOf(doc.documentElement.nodeName) }
+	}.getOrDefault(emptyList())
+
+	/** То же для журнала. */
+	fun topLevelNames(xml: String): String =
+		topLevelNameList(xml).ifEmpty { null }?.toString() ?: "не разобрать или пусто"
+
+
 	fun replaceDataDocsInString(
 		xmlContent: String,
 		newDataDocsXml: String,
@@ -223,24 +239,32 @@ object DataDocsProcessor {
 			.parse(ByteArrayInputStream(newDataDocsXml.toByteArray(Charsets.UTF_8)))
 		newDoc.documentElement.normalize()
 		val newRoot = newDoc.documentElement
-		// Удаляем в исходнике только те датадоки, которые указаны
-		val toRemove = mutableListOf<DomNode>()
-		val children = srcRoot.childNodes
-		for (i in 0 until children.length) {
-			val n = children.item(i)
-			if (n.nodeType == DomNode.ELEMENT_NODE && wantedDocs.contains(n.nodeName)) {
-				toRemove.add(n)
-			}
-		}
-		toRemove.forEach { srcRoot.removeChild(it) }
-		// Из нового документа берём только нужные датадоки и вставляем в исходный
+		// Из нового документа берём только нужные датадоки; результат может быть и самим документом (корень
+		// <ApplicationData>…) без обёртки <Data>
+		val replacements = mutableListOf<DomNode>()
 		val newChildren = newRoot.childNodes
 		for (i in 0 until newChildren.length) {
 			val n = newChildren.item(i)
 			if (n.nodeType == DomNode.ELEMENT_NODE && wantedDocs.contains(n.nodeName)) {
-				srcRoot.appendChild(srcDoc.importNode(n, true))
+				replacements.add(n)
 			}
 		}
+		if (replacements.isEmpty() && wantedDocs.contains(newRoot.nodeName)) {
+			replacements.add(newRoot)
+		}
+		// Удаляем в исходнике только те датадоки, которые есть в новом результате: если XSLT документ не вернул,
+		// остаётся прежний (иначе документ пропадал целиком, и следующие правила видели данные без него)
+		val replacedNames = replacements.map { it.nodeName }.toSet()
+		val toRemove = mutableListOf<DomNode>()
+		val children = srcRoot.childNodes
+		for (i in 0 until children.length) {
+			val n = children.item(i)
+			if (n.nodeType == DomNode.ELEMENT_NODE && n.nodeName in replacedNames) {
+				toRemove.add(n)
+			}
+		}
+		toRemove.forEach { srcRoot.removeChild(it) }
+		replacements.forEach { srcRoot.appendChild(srcDoc.importNode(it, true)) }
 		// В строку
 		val transformer = TransformerFactory.newInstance().newTransformer().apply {
 			setOutputProperty(OutputKeys.INDENT, "yes")

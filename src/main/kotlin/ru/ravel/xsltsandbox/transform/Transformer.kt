@@ -33,6 +33,7 @@ import ru.ravel.xsltsandbox.models.form.Form
 import ru.ravel.xsltsandbox.models.procedurereturn.ProcedureReturn
 import ru.ravel.xsltsandbox.models.segmentationtree.BusinessRule
 import ru.ravel.xsltsandbox.models.segmentationtree.SegmentationTree
+import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor
 import ru.ravel.xsltsandbox.log.AppLog
 import ru.ravel.xsltsandbox.utils.ProcessPaths
 import ru.ravel.xsltsandbox.models.wait.Wait
@@ -246,7 +247,7 @@ class Transformer(
 					val rulesDir = path?.let { ProcessPaths.businessRulesDir(it) }
 					AppLog.info(
 						"ST ${path?.parent?.fileName}: правила из $rulesDir, вход ${xml.length} симв., " +
-							"документы на входе: ${topLevelElements(xml)}",
+							"документы на входе: ${DataDocsProcessor.topLevelNames(xml)}",
 					)
 					// Выходы ST в Layout.xml названы по ConnectionID правила (а не по RuleID); первое сработавшее
 					// по ExecutionOrder правило задаёт выход, иначе — AllFalse.
@@ -368,17 +369,4 @@ class Transformer(
 		support.highlightAllMatches(session.xsltArea, state.query, false)
 		Platform.runLater { redrawXsltOverlay(session) }
 	}
-}
-
-
-/** Имена элементов верхнего уровня XML (для журнала); при ошибке разбора — её текст. */
-private fun topLevelElements(xml: String): String {
-	return runCatching {
-		val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
-			.parse(org.xml.sax.InputSource(java.io.StringReader(xml)))
-		val children = doc.documentElement.childNodes
-		(0 until children.length).map { children.item(it) }
-			.filter { it.nodeType == org.w3c.dom.Node.ELEMENT_NODE }
-			.map { it.nodeName }
-	}.getOrElse { "не разобрать: ${it.message}" }.toString()
 }
