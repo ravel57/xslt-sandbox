@@ -43,9 +43,10 @@ class SessionFiles(
 ) {
 	private val state get() = ctx.editor
 
-	fun openXmlFile(session: DocSession, path: Path) {
+	fun openXmlFile(session: DocSession, path: Path, onLoaded: () -> Unit = {}) {
 		loadFileIntoAreaAsync(session, path, session.xmlArea) {
 			session.xmlPath = it
+			onLoaded()
 		}
 	}
 

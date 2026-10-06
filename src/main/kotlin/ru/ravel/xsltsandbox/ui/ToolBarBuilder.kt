@@ -17,6 +17,7 @@ import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid
 import org.kordamp.ikonli.javafx.FontIcon
 import ru.ravel.xsltsandbox.AppContext
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.inputDocuments
+import ru.ravel.xsltsandbox.log.AppLog
 import ru.ravel.xsltsandbox.debugger.ActivityDebugger
 import ru.ravel.xsltsandbox.editor.CodeAreaSupport
 import ru.ravel.xsltsandbox.editor.SearchDialog
@@ -51,7 +52,9 @@ class ToolBarBuilder(
 		ctx.currentSession.dataDocs = XmlUtil.readXmlSafe(file)
 		val properties = ctx.currentSession.mappingPropertyFile?.toFile()
 		if (properties != null) {
-			ctx.currentSession.xmlArea.replaceText(inputDocuments(properties, ctx.currentSession.dataDocs!!))
+			val input = inputDocuments(properties, ctx.currentSession.dataDocs!!)
+			AppLog.info("датадоки из ${file.name} (${ctx.currentSession.dataDocs!!.length} симв.) → вход ${properties.name}: ${input.length} симв.")
+			ctx.currentSession.xmlArea.replaceText(input)
 		}
 	}
 

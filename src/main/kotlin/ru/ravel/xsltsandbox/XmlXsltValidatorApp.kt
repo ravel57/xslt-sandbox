@@ -169,6 +169,7 @@ class XmlXsltValidatorApp : Application() {
 	private fun openInputArgs(args: List<String>) {
 		val callStack = mutableListOf<Path>()
 		var fullDataDocs: File? = null
+		var dataPath: Path? = null
 		for (index in args.indices) {
 			val path = File(args.getOrNull(index + 1).toString()).toPath()
 			if (args[index].startsWith("--")) {
@@ -179,7 +180,7 @@ class XmlXsltValidatorApp : Application() {
 				"--input-xslt-path" -> files.openXsltFile(ctx.currentSession, path)
 				"--input-properties-path" -> files.openBrActivity(ctx.currentSession, path)
 				"--input-activity-path" -> files.openFormOrWaitFile(ctx.currentSession, path)
-				"--input-data-path" -> files.openXmlFile(ctx.currentSession, path)
+				"--input-data-path" -> dataPath = path
 				"--process-path" -> files.openProcessDir(path)
 				"--debug-port" -> args.getOrNull(index + 1)?.toIntOrNull()
 					?.takeIf { it in 1..65535 }
@@ -191,11 +192,21 @@ class XmlXsltValidatorApp : Application() {
 		if (callStack.isNotEmpty()) {
 			debugger.setInitialCallStack(ctx.currentSession, callStack)
 		}
-		// После остальных аргументов: подстановка входных документов нужна уже открытой активности.
-		fullDataDocs?.let { file ->
-			if (file.isFile) toolBar.selectDataDocsFile(file) else AppLog.warn("файл датадоков не найден: $file")
+		fun applyFullDataDocs() {
+			fullDataDocs?.let { file ->
+				if (file.isFile) toolBar.selectDataDocsFile(file) else AppLog.warn("файл датадоков не найден: $file")
+			}
+			ctx.refreshActivityButtons()
+			javafx.application.Platform.runLater {
+				AppLog.info("входной XML активности: ${ctx.currentSession.xmlArea.length} симв.")
+			}
 		}
-		ctx.refreshActivityButtons()
+		val input = dataPath
+		if (input != null) {
+			files.openXmlFile(ctx.currentSession, input) { applyFullDataDocs() }
+		} else {
+			applyFullDataDocs()
+		}
 	}
 }
 
