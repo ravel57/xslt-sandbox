@@ -26,6 +26,7 @@ import ru.ravel.xsltsandbox.ui.SessionTabFactory
 import ru.ravel.xsltsandbox.ui.ToolBarBuilder
 import ru.ravel.xsltsandbox.xml.XPathTools
 import java.io.File
+import java.nio.file.Path
 
 
 class XmlXsltValidatorApp : Application() {
@@ -162,6 +163,7 @@ class XmlXsltValidatorApp : Application() {
 
 
 	private fun openInputArgs(args: List<String>) {
+		val callStack = mutableListOf<Path>()
 		for (index in args.indices) {
 			val path = File(args.getOrNull(index + 1).toString()).toPath()
 			when (args[index]) {
@@ -171,7 +173,11 @@ class XmlXsltValidatorApp : Application() {
 				"--debug-port" -> args.getOrNull(index + 1)?.toIntOrNull()
 					?.takeIf { it in 1..65535 }
 					?.let { ctx.debugBridge = DebugBridge(it) }
+				"--call-stack-item" -> callStack.add(path)
 			}
+		}
+		if (callStack.isNotEmpty()) {
+			debugger.setInitialCallStack(ctx.currentSession, callStack)
 		}
 	}
 }

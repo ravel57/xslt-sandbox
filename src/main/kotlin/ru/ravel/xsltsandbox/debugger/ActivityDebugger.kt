@@ -48,8 +48,14 @@ class ActivityDebugger(
 	private val activitiesDebugProcedureStack = mutableMapOf<DocSession, Stack<Path>>()
 
 
+
+	fun setInitialCallStack(session: DocSession, callSites: List<Path>) {
+		activitiesDebugProcedureStack[session] = Stack<Path>().apply { callSites.forEach(::push) }
+	}
+
+
 	fun runDebugAllPathsBackground() {
-		val session = ctx.currentSession ?: return
+		val session = ctx.currentSession
 
 		if (session.dataDocs.isNullOrBlank()) {
 			showStatus(ctx.stage, "DataDocs пустые — вставьте DataDocs")
@@ -468,7 +474,7 @@ class ActivityDebugger(
 				}
 
 				ActivityType.PROCEDURE_RETURN -> {
-					if (activitiesDebugProcedureStack[ctx.currentSession]?.peek() != null) {
+					if (activitiesDebugProcedureStack[ctx.currentSession]?.isNotEmpty() == true) {
 						ctx.currentSession.mode = TransformMode.PR
 						ctx.currentSession.otherActivityPath = nextActivityPropertiesPath
 						val result = transformer.doTransform(ctx.stage)
