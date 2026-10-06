@@ -55,11 +55,27 @@ class SessionFiles(
 			else -> return false
 		}
 		session.mode = mode
-		loadFileIntoAreaAsync(session, path, session.xsltArea) { session.xsltPath = it }
+		loadFileIntoAreaAsync(session, path, session.xsltArea) {
+			session.xsltPath = it
+			ctx.refreshActivityButtons()
+		}
 		session.mappingPropertyFile = path
 		session.otherActivityPath = path
 		ctx.xsltRadio.isSelected = true
 		session.updateTabTitle()
+		return true
+	}
+
+
+	/**
+	 * Открывает Properties.xml бизнес-правила в [session] в режиме BR — так же, как по клику в
+	 * дереве файлов: правило разбирается, включается переключатель BR, кнопки отладки обновляются.
+	 */
+	fun openBrActivity(session: DocSession, path: Path): Boolean {
+		if (!openBrFile(session, path)) return false
+		session.mode = TransformMode.BR
+		ctx.brRadio.isSelected = true
+		ctx.refreshActivityButtons()
 		return true
 	}
 
@@ -69,6 +85,7 @@ class SessionFiles(
 			session.xsltPath = loaded
 			session.mappingPropertyFile = loaded.parent.resolve("Properties.xml")
 			session.updateTabTitle()
+			ctx.refreshActivityButtons()
 		}
 	}
 
@@ -212,16 +229,21 @@ class SessionFiles(
 			}
 		}
 		state.process?.let { p ->
-			val procPath = Paths.get(p)
-			if (Files.isDirectory(procPath)) {
-				ctx.processPath = procPath
-				Platform.runLater {
-					ctx.dirField.text = procPath.toAbsolutePath().toString()
-					ctx.fileTreeSearch.isDisable = false
-					ctx.rebuildFileTree(ctx.fileTreeSearch.text)
-				}
-			}
+			openProcessDir(Paths.get(p))
 		}
+	}
+
+
+	/** Делает [procPath] папкой процесса: дерево файлов и поиск работают от неё. false, если это не папка. */
+	fun openProcessDir(procPath: Path): Boolean {
+		if (!Files.isDirectory(procPath)) return false
+		ctx.processPath = procPath
+		Platform.runLater {
+			ctx.dirField.text = procPath.toAbsolutePath().toString()
+			ctx.fileTreeSearch.isDisable = false
+			ctx.rebuildFileTree(ctx.fileTreeSearch.text)
+		}
+		return true
 	}
 
 

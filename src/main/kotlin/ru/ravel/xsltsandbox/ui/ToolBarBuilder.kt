@@ -1,22 +1,11 @@
 package ru.ravel.xsltsandbox.ui
 
-import java.nio.file.Files
-import java.io.File
 import javafx.event.ActionEvent
 import javafx.geometry.Insets
 import javafx.geometry.Orientation
 import javafx.geometry.Pos
 import javafx.scene.Scene
-import javafx.scene.control.Button
-import javafx.scene.control.CheckBox
-import javafx.scene.control.Label
-import javafx.scene.control.MenuButton
-import javafx.scene.control.MenuItem
-import javafx.scene.control.RadioButton
-import javafx.scene.control.Separator
-import javafx.scene.control.SeparatorMenuItem
-import javafx.scene.control.ToggleGroup
-import javafx.scene.control.Tooltip
+import javafx.scene.control.*
 import javafx.scene.layout.HBox
 import javafx.scene.layout.Region
 import javafx.scene.layout.StackPane
@@ -30,16 +19,15 @@ import ru.ravel.xsltsandbox.AppContext
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.extractNeededDataDocs
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.getDataDocsInOut
 import ru.ravel.xsltsandbox.debugger.ActivityDebugger
-import ru.ravel.xsltsandbox.diagram.RouteFinder
 import ru.ravel.xsltsandbox.editor.CodeAreaSupport
 import ru.ravel.xsltsandbox.editor.SearchDialog
 import ru.ravel.xsltsandbox.files.SessionFiles
 import ru.ravel.xsltsandbox.models.DocSession
 import ru.ravel.xsltsandbox.models.TransformMode
-import ru.ravel.xsltsandbox.models.bizrule.XPath
 import ru.ravel.xsltsandbox.transform.Transformer
 import ru.ravel.xsltsandbox.utils.XmlUtil
 import ru.ravel.xsltsandbox.xml.XPathTools
+import java.io.File
 
 /**
  * Верхняя панель инструментов.
@@ -278,11 +266,11 @@ class ToolBarBuilder(
 		}
 
 		val diagramSeparator = Separator(Orientation.VERTICAL)
-		val diagramBtn = Button().apply {
-			graphic = FontIcon(FontAwesomeSolid.SITEMAP)
-			tooltip = Tooltip("Show flow diagram")
-			setOnAction { RouteFinder(ctx.stage, ctx.currentSession).openFlowDiagramWindow() }
-		}
+//		val diagramBtn = Button().apply {
+//			graphic = FontIcon(FontAwesomeSolid.SITEMAP)
+//			tooltip = Tooltip("Show flow diagram")
+//			setOnAction { RouteFinder(ctx.stage, ctx.currentSession).openFlowDiagramWindow() }
+//		}
 
 		fun updateActivityButtons() {
 			val xsltLoaded = ctx.currentSession.xsltPath != null
@@ -290,6 +278,7 @@ class ToolBarBuilder(
 			nextActivityBtn.isDisable = !(xsltLoaded || brLoaded)
 			runDebugBtn.isDisable = ctx.currentSession.dataDocs.isNullOrBlank() || !(xsltLoaded || brLoaded)
 		}
+		ctx.refreshActivityButtons = { updateActivityButtons() }
 
 		dataDocsActivityBtn.items.forEach { item ->
 			item.addEventHandler(ActionEvent.ACTION) {
@@ -319,7 +308,7 @@ class ToolBarBuilder(
 			runDebugBtn,
 			dataDocsActivityBtn,
 			diagramSeparator,
-			diagramBtn,
+//			diagramBtn,
 		).apply {
 			alignment = Pos.CENTER_LEFT
 			padding = Insets(10.0)

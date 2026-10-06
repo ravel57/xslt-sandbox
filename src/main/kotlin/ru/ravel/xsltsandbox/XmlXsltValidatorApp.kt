@@ -112,8 +112,10 @@ class XmlXsltValidatorApp : Application() {
 		// восстановим последнюю сессию из config (если нужно)
 		if (!args.contains("--no-restore")) {
 			files.restorePreviouslyOpenedFiles(config, first)
-			watcher.start()
 		}
+		// Слежение за файлами не зависит от восстановления сессии: без него правки открытых файлов
+		// (XSLT, Mock.xml) во внешнем редакторе не подтягиваются при запуске с --no-restore.
+		watcher.start()
 	}
 
 
@@ -169,9 +171,10 @@ class XmlXsltValidatorApp : Application() {
 			val path = File(args.getOrNull(index + 1).toString()).toPath()
 			when (args[index]) {
 				"--input-xslt-path" -> files.openXsltFile(ctx.currentSession, path)
-				"--input-properties-path" -> files.openBrFile(ctx.currentSession, path)
+				"--input-properties-path" -> files.openBrActivity(ctx.currentSession, path)
 				"--input-activity-path" -> files.openFormOrWaitFile(ctx.currentSession, path)
 				"--input-data-path" -> files.openXmlFile(ctx.currentSession, path)
+				"--process-path" -> files.openProcessDir(path)
 				"--debug-port" -> args.getOrNull(index + 1)?.toIntOrNull()
 					?.takeIf { it in 1..65535 }
 					?.let { ctx.debugBridge = DebugBridge(it) }
@@ -184,6 +187,7 @@ class XmlXsltValidatorApp : Application() {
 		}
 		// После остальных аргументов: подстановка входных документов нужна уже открытой активности.
 		fullDataDocs?.takeIf { it.isFile }?.let { toolBar.selectDataDocsFile(it) }
+		ctx.refreshActivityButtons()
 	}
 }
 

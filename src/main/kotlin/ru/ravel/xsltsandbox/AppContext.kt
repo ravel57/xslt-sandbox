@@ -43,5 +43,12 @@ class AppContext {
 
 	var debugBridge: DebugBridge? = null
 
+	/**
+	 * Пересчитывает доступность кнопок отладки (next activity, run debug). Нужен коду, который
+	 * открывает активность не кликом по переключателю режима — например, аргументам запуска:
+	 * сами переключатели в этом случае не меняются и кнопки не обновляются.
+	 */
+	var refreshActivityButtons: () -> Unit = {}
+
 	var rebuildFileTree: (String) -> Unit = {}
 }
