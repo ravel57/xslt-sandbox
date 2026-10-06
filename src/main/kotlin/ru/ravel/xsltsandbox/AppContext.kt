@@ -11,6 +11,7 @@ import javafx.scene.control.TextField
 import javafx.scene.control.TreeView
 import javafx.stage.Stage
 import org.fxmisc.richtext.CodeArea
+import ru.ravel.xsltsandbox.debug.DebugBridge
 import ru.ravel.xsltsandbox.editor.EditorState
 import ru.ravel.xsltsandbox.models.DocSession
 
@@ -40,6 +41,7 @@ class AppContext {
 	lateinit var fileTreeSearch: TextField
 	var processPath: Path? = null
 
-	/** Перестраивает дерево файлов по [processPath] с фильтром (асинхронно) */
+	var debugBridge: DebugBridge? = null
+
 	var rebuildFileTree: (String) -> Unit = {}
 }

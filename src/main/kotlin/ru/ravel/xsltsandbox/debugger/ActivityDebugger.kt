@@ -16,6 +16,7 @@ import kotlin.io.path.absolutePathString
 import kotlin.io.path.exists
 import kotlin.io.path.name
 import ru.ravel.xsltsandbox.AppContext
+import ru.ravel.xsltsandbox.debug.DebugStep
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.extractNeededDataDocs
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.getDataDocsInOut
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.mergeMockWithDataDocs
@@ -262,6 +263,7 @@ class ActivityDebugger(
 				-> ctx.currentSession.otherActivityPath
 		} ?: return
 
+		val docsIn = ctx.currentSession.xmlArea.text
 		val result = transformer.doTransform(ctx.stage)
 
 		val exitName = when (ctx.currentSession.mode) {
@@ -272,7 +274,12 @@ class ActivityDebugger(
 
 		val nextActivityName = LayoutUtil(ctx.currentSession)
 			.getNextActivity(selectedActivityPath, ctx.currentSession.mode, exitName)
-			?: return
+
+		reportStep(selectedActivityPath, exitName, nextActivityName, docsIn, result)
+
+		if (nextActivityName == null) {
+			return
+		}
 
 		val nextActivityDir = selectedActivityPath.parent?.parent?.resolve(nextActivityName)
 		val nextActivityPropertiesPath = nextActivityDir?.resolve("Properties.xml")
@@ -304,6 +311,31 @@ class ActivityDebugger(
 		}
 
 		processNextActivity(nextActivityPropertiesPath, nextActivityType, nextActivityDir)
+	}
+
+
+	/** Сообщает process viewer о выполненной активности; без `--debug-port` ничего не делает. */
+	private fun reportStep(
+		activityPath: Path,
+		exitName: String?,
+		nextActivityName: String?,
+		docsIn: String?,
+		result: String?,
+	) {
+		val bridge = ctx.debugBridge ?: return
+		val activityDir = activityPath.parent ?: return
+		val mode = ctx.currentSession.mode
+		bridge.sendStep(
+			DebugStep(
+				procedure = activityDir.parent?.fileName?.toString() ?: return,
+				activity = activityDir.fileName.toString(),
+				mode = mode.name,
+				exit = exitName,
+				next = nextActivityName,
+				docsIn = docsIn,
+				docsOut = if (mode == TransformMode.XSLT) result else null,
+			),
+		)
 	}
 
 

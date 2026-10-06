@@ -9,6 +9,7 @@ import javafx.scene.layout.BorderPane
 import javafx.stage.Stage
 import ru.ravel.xsltsandbox.config.ConfigStore
 import ru.ravel.xsltsandbox.datadocs.MockXmlEditor
+import ru.ravel.xsltsandbox.debug.DebugBridge
 import ru.ravel.xsltsandbox.debugger.ActivityDebugger
 import ru.ravel.xsltsandbox.editor.CodeAreaSupport
 import ru.ravel.xsltsandbox.editor.DataDocsViewer
@@ -60,6 +61,7 @@ class XmlXsltValidatorApp : Application() {
 		try {
 			configStore.saveFrom(ctx)
 			watcher.close()
+			ctx.debugBridge?.close()
 		} catch (e: Exception) {
 			System.err.println(e.localizedMessage)
 			System.err.println(e.stackTrace)
@@ -159,7 +161,6 @@ class XmlXsltValidatorApp : Application() {
 	}
 
 
-	/** Обрабатывает аргументы командной строки `--input-*-path` */
 	private fun openInputArgs(args: List<String>) {
 		for (index in args.indices) {
 			val path = File(args.getOrNull(index + 1).toString()).toPath()
@@ -167,6 +168,9 @@ class XmlXsltValidatorApp : Application() {
 				"--input-xslt-path" -> files.openXsltFile(ctx.currentSession, path)
 				"--input-properties-path" -> files.openBrFile(ctx.currentSession, path)
 				"--input-data-path" -> files.openXmlFile(ctx.currentSession, path)
+				"--debug-port" -> args.getOrNull(index + 1)?.toIntOrNull()
+					?.takeIf { it in 1..65535 }
+					?.let { ctx.debugBridge = DebugBridge(it) }
 			}
 		}
 	}
