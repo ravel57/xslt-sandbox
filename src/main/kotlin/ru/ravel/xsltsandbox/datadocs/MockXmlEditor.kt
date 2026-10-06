@@ -22,6 +22,7 @@ import ru.ravel.xsltsandbox.AppContext
 import ru.ravel.xsltsandbox.editor.CodeAreaSupport
 import ru.ravel.xsltsandbox.ui.Dialogs.showStatus
 import ru.ravel.xsltsandbox.ui.FileChoosers
+import ru.ravel.xsltsandbox.utils.ProcessPaths
 import ru.ravel.xsltsandbox.utils.XmlUtil
 
 /**
@@ -33,11 +34,13 @@ class MockXmlEditor(
 ) {
 	/** Если в activityDir нет Mock.xml — открывает редактор и сохраняет. Возвращает путь к Mock.xml или null при отмене. */
 	fun ensureMockXml(activityDir: Path): Path? {
-		val mock = activityDir.resolve("Mock.xml")
+		// активность могла быть открыта из снимка ветки — Mock.xml читаем и пишем в реальном процессе
+		val realDir = ProcessPaths.inRealProcess(ctx.processPath, activityDir)
+		val mock = realDir.resolve("Mock.xml")
 		return if (Files.exists(mock)) {
 			mock
 		} else {
-			showMockXmlEditor(activityDir)
+			showMockXmlEditor(realDir)
 		}
 	}
 
