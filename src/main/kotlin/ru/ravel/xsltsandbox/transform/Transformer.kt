@@ -16,6 +16,7 @@ import org.xml.sax.InputSource
 import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
 import ru.ravel.xsltsandbox.AppContext
+import ru.ravel.xsltsandbox.br.BizRuleEvaluator
 import ru.ravel.xsltsandbox.br.BizRuleEvaluator.evalQuantifier
 import ru.ravel.xsltsandbox.br.BizRuleEvaluator.evaluateBR
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.applySetValues
@@ -279,6 +280,9 @@ class Transformer(
 							else -> false
 						}
 						AppLog.info("ST: правило ${ruleRef.ruleID} (выход ${ruleRef.connectionID}) = $result")
+						if (!result) {
+							AppLog.info("ST: почему ${ruleRef.ruleID} = false:\n" + BizRuleEvaluator.explain(xml, rootNode).joinToString("\n"))
+						}
 						result
 					}
 

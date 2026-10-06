@@ -280,4 +280,84 @@ object BizRuleEvaluator {
 			}
 		}
 	}
+
+
+	/**
+	 * Пояснение вычисления правила для журнала: значения переменных (первые несколько) и результат каждого
+	 * предиката, а также неподдерживаемые типы предикатов и переменные связки, которые вычислитель не связывает.
+	 * [root] — [Connective] или [Quantifier]; строк не больше [maxLines].
+	 */
+	fun explain(xml: String, root: Any, maxLines: Int = 60): List<String> {
+		val lines = mutableListOf<String>()
+		try {
+			val proc = Processor(false)
+			val doc = proc.newDocumentBuilder().build(StreamSource(StringReader(xml)))
+			val explainer = Explainer(proc.newXPathCompiler(), doc, lines, maxLines)
+			when (root) {
+				is Connective -> explainer.connective(root, emptyMap(), 0)
+				is Quantifier -> explainer.quantifier(root, emptyMap(), 0)
+			}
+		} catch (e: Exception) {
+			lines += "не удалось пояснить: ${e.message}"
+		}
+		return lines
+	}
+
+
+	private val SUPPORTED_PREDICATES = setOf(
+		"true", "false", "textequality", "textinequality", "numberequality", "numberinequality",
+		"greaterthan", "lessthan", "textgreaterthanorequal", "numbergreaterthan",
+	)
+
+
+	private class Explainer(
+		private val compiler: XPathCompiler,
+		private val doc: XdmNode,
+		private val lines: MutableList<String>,
+		private val maxLines: Int,
+	) {
+		private fun add(depth: Int, text: String) {
+			if (lines.size < maxLines) lines += "  ".repeat(depth) + text
+			else if (lines.size == maxLines) lines += "…"
+		}
+
+		private fun short(value: String) = value.trim().let { if (it.length > 60) it.take(60) + "…" else it }
+
+		fun connective(c: Connective, vmap: Map<String, String>, depth: Int) {
+			add(depth, "связка ${displayName(c.type)}")
+			c.variableDefinitions.orEmpty().forEach {
+				add(depth + 1, "VariableDefinition ${it.name} в связке — вычислитель их не связывает, предикаты увидят пустое значение")
+			}
+			predicates(c.predicates.orEmpty(), vmap, depth + 1)
+			c.quantifiers.orEmpty().forEach { quantifier(it, vmap, depth + 1) }
+			c.connectives.orEmpty().forEach { connective(it, vmap, depth + 1) }
+		}
+
+		fun quantifier(q: Quantifier, parent: Map<String, String>, depth: Int) {
+			val vd = q.variableDefinition
+			val xpath = vd?.xpath?.value
+			if (vd == null || xpath == null) {
+				add(depth, "квантор ${displayName(q.type)}: нет определения переменной")
+				return
+			}
+			val values = xpathToValues(xpath, compiler, doc)
+			add(depth, "квантор ${displayName(q.type)} ${vd.name} = $xpath → ${values.size} знач.: ${values.take(3).map(::short)}")
+			for (value in values.take(3)) {
+				val vmap = parent + mapOf(vd.name to value)
+				predicates(q.predicates.orEmpty(), vmap, depth + 1)
+				q.quantifiers.orEmpty().forEach { quantifier(it, vmap, depth + 1) }
+				q.connectives.orEmpty().forEach { connective(it, vmap, depth + 1) }
+			}
+		}
+
+		private fun predicates(preds: List<Predicate>, vmap: Map<String, String>, depth: Int) {
+			for (p in preds) {
+				val vars = p.variables.map { it.value }
+				val values = vars.joinToString { "$it='${short(vmap[it] ?: "<не определена>")}'" }
+				val constant = p.constant?.value?.let { " const='${short(it)}'" }.orEmpty()
+				val note = if (kindOf(p.type) in SUPPORTED_PREDICATES) "" else "  [тип не поддерживается — всегда false]"
+				add(depth, "предикат ${p.type.substringBefore(',')}: $values$constant → ${evalPredicate(p, compiler, doc, vmap)}$note")
+			}
+		}
+	}
 }
