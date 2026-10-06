@@ -28,6 +28,7 @@ import ru.ravel.xsltsandbox.utils.LayoutUtil
 import ru.ravel.xsltsandbox.utils.TreeUtil.expandAll
 import ru.ravel.xsltsandbox.utils.TreeUtil.toTreeItem
 import ru.ravel.xsltsandbox.utils.XmlUtil
+import ru.ravel.xsltsandbox.log.AppLog
 
 /**
  * Загрузка и сохранение файлов сессий (XML, XSLT, бизнес-правил) и восстановление вкладок.
@@ -236,7 +237,11 @@ class SessionFiles(
 
 	/** Делает [procPath] папкой процесса: дерево файлов и поиск работают от неё. false, если это не папка. */
 	fun openProcessDir(procPath: Path): Boolean {
-		if (!Files.isDirectory(procPath)) return false
+		if (!Files.isDirectory(procPath)) {
+			AppLog.warn("папка процесса не найдена: $procPath")
+			return false
+		}
+		AppLog.info("папка процесса: $procPath")
 		ctx.processPath = procPath
 		Platform.runLater {
 			ctx.dirField.text = procPath.toAbsolutePath().toString()

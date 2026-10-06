@@ -16,6 +16,7 @@ import ru.ravel.xsltsandbox.editor.DataDocsViewer
 import ru.ravel.xsltsandbox.editor.SearchDialog
 import ru.ravel.xsltsandbox.files.FileWatcher
 import ru.ravel.xsltsandbox.files.SessionFiles
+import ru.ravel.xsltsandbox.log.AppLog
 import ru.ravel.xsltsandbox.models.AppConfig
 import ru.ravel.xsltsandbox.models.DocSession
 import ru.ravel.xsltsandbox.models.TransformMode
@@ -64,8 +65,7 @@ class XmlXsltValidatorApp : Application() {
 			watcher.close()
 			ctx.debugBridge?.close()
 		} catch (e: Exception) {
-			System.err.println(e.localizedMessage)
-			System.err.println(e.stackTrace)
+			AppLog.error("Ошибка при закрытии приложения", e)
 		}
 		super.stop()
 	}
@@ -105,11 +105,13 @@ class XmlXsltValidatorApp : Application() {
 		primaryStage.title = "XSLT Sandbox"
 		primaryStage.scene = scene
 		primaryStage.show()
+		AppLog.info("окно открыто")
 
 		val args = parameters.raw
 		openInputArgs(args)
 
 		// восстановим последнюю сессию из config (если нужно)
+		AppLog.info(if (args.contains("--no-restore")) "восстановление сессии отключено (--no-restore)" else "восстановление сессии")
 		if (!args.contains("--no-restore")) {
 			files.restorePreviouslyOpenedFiles(config, first)
 		}
@@ -169,6 +171,10 @@ class XmlXsltValidatorApp : Application() {
 		var fullDataDocs: File? = null
 		for (index in args.indices) {
 			val path = File(args.getOrNull(index + 1).toString()).toPath()
+			if (args[index].startsWith("--")) {
+				val value = args.getOrNull(index + 1)?.takeUnless { it.startsWith("--") }.orEmpty()
+				AppLog.info("аргумент ${args[index]} $value".trimEnd())
+			}
 			when (args[index]) {
 				"--input-xslt-path" -> files.openXsltFile(ctx.currentSession, path)
 				"--input-properties-path" -> files.openBrActivity(ctx.currentSession, path)
@@ -186,11 +192,14 @@ class XmlXsltValidatorApp : Application() {
 			debugger.setInitialCallStack(ctx.currentSession, callStack)
 		}
 		// После остальных аргументов: подстановка входных документов нужна уже открытой активности.
-		fullDataDocs?.takeIf { it.isFile }?.let { toolBar.selectDataDocsFile(it) }
+		fullDataDocs?.let { file ->
+			if (file.isFile) toolBar.selectDataDocsFile(file) else AppLog.warn("файл датадоков не найден: $file")
+		}
 		ctx.refreshActivityButtons()
 	}
 }
 
 fun main(vararg args: String) {
+	AppLog.install(args)
 	Application.launch(XmlXsltValidatorApp::class.java, *args)
 }

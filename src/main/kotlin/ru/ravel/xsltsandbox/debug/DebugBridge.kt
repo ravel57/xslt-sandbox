@@ -8,6 +8,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.Executors
+import ru.ravel.xsltsandbox.log.AppLog
 
 /** Один выполненный шаг отладчика — то, что уходит в process viewer. */
 data class DebugStep(
@@ -53,6 +54,7 @@ class DebugBridge(private val port: Int) : AutoCloseable {
 				"docsOut" to step.docsOut,
 			),
 		)
+		AppLog.info("шаг отладки → viewer: ${step.procedure}/${step.activity} [${step.mode}] выход=${step.exit} далее=${step.next}")
 		executor.execute { deliver(message) }
 	}
 
@@ -64,7 +66,8 @@ class DebugBridge(private val port: Int) : AutoCloseable {
 				out.write("\n")
 				out.flush()
 				return
-			} catch (_: IOException) {
+			} catch (e: IOException) {
+				AppLog.warn("viewer на порту $port недоступен: ${e.message}")
 				disconnect()
 			}
 		}
@@ -75,6 +78,7 @@ class DebugBridge(private val port: Int) : AutoCloseable {
 		connection.connect(InetSocketAddress(InetAddress.getByName(LOOPBACK), port), CONNECT_TIMEOUT_MS)
 		connection.tcpNoDelay = true
 		socket = connection
+		AppLog.info("подключено к viewer, порт $port")
 		return BufferedWriter(OutputStreamWriter(connection.getOutputStream(), Charsets.UTF_8)).also { writer = it }
 	}
 

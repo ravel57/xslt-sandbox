@@ -24,6 +24,7 @@ import ru.ravel.xsltsandbox.ui.Dialogs.showStatus
 import ru.ravel.xsltsandbox.ui.FileChoosers
 import ru.ravel.xsltsandbox.utils.ProcessPaths
 import ru.ravel.xsltsandbox.utils.XmlUtil
+import ru.ravel.xsltsandbox.log.AppLog
 
 /**
  * Редактор Mock.xml для активности Data Source.
@@ -37,10 +38,13 @@ class MockXmlEditor(
 		// активность могла быть открыта из снимка ветки — Mock.xml читаем и пишем в реальном процессе
 		val realDir = ProcessPaths.inRealProcess(ctx.processPath, activityDir)
 		val mock = realDir.resolve("Mock.xml")
+		AppLog.info("Mock.xml: активность $activityDir, реальная папка $realDir (процесс ${ctx.processPath}), существует=${Files.exists(mock)}")
 		return if (Files.exists(mock)) {
 			mock
 		} else {
-			showMockXmlEditor(realDir)
+			showMockXmlEditor(realDir).also {
+				if (it == null) AppLog.info("Mock.xml не создан (отмена)") else AppLog.info("Mock.xml сохранён: $it")
+			}
 		}
 	}
 
@@ -88,7 +92,13 @@ class MockXmlEditor(
 			isDefaultButton = true
 			setOnAction {
 				val out = activityDir.resolve("Mock.xml").toFile()
-				XmlUtil.writeXmlWithBom(out, area.text, Charsets.UTF_8)
+				try {
+					XmlUtil.writeXmlWithBom(out, area.text, Charsets.UTF_8)
+				} catch (e: Exception) {
+					AppLog.error("Не удалось сохранить $out", e)
+					showStatus(ctx.stage, "Не удалось сохранить Mock.xml:\n${e.message}")
+					return@setOnAction
+				}
 				result = out.toPath()
 				dlg.close()
 			}

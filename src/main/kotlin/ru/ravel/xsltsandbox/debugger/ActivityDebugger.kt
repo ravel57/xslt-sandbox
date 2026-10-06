@@ -34,6 +34,7 @@ import ru.ravel.xsltsandbox.models.procedure.ProcedureCall
 import ru.ravel.xsltsandbox.transform.Transformer
 import ru.ravel.xsltsandbox.ui.Dialogs.showStatus
 import ru.ravel.xsltsandbox.utils.LayoutUtil
+import ru.ravel.xsltsandbox.log.AppLog
 
 /**
  * Отладчик активностей: пошаговый проход по Layout.xml и прогон по всем маршрутам.
@@ -288,6 +289,7 @@ class ActivityDebugger(
 		}
 
 		val nextActivityDir = selectedActivityPath.parent?.parent?.resolve(nextActivityName)
+		AppLog.info("отладка: $selectedActivityPath [${ctx.currentSession.mode}] выход=$exitName → $nextActivityName")
 		val nextActivityPropertiesPath = nextActivityDir?.resolve("Properties.xml")
 			?: return
 
