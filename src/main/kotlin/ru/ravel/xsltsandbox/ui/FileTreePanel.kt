@@ -156,18 +156,7 @@ class FileTreePanel(
 				session.updateTabTitle()
 			}
 
-			item.extension.equals("xml", true) && isFormOrWait -> {
-				when (type) {
-					ActivityType.FORM -> session.mode = TransformMode.FM
-					ActivityType.WAIT -> session.mode = TransformMode.WA
-					else -> return
-				}
-				files.loadFileIntoAreaAsync(session, item, session.xsltArea) { session.xsltPath = it }
-				session.mappingPropertyFile = item
-				session.otherActivityPath = item
-				ctx.xsltRadio.isSelected = true
-				session.updateTabTitle()
-			}
+			item.extension.equals("xml", true) && isFormOrWait -> files.openFormOrWaitFile(session, item)
 
 			else -> files.openXmlFile(session, item)
 		}

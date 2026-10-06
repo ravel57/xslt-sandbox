@@ -13,6 +13,7 @@ import org.fxmisc.richtext.CodeArea
 import ru.ravel.xsltsandbox.AppContext
 import ru.ravel.xsltsandbox.config.ConfigStore
 import ru.ravel.xsltsandbox.editor.CodeAreaSupport
+import ru.ravel.xsltsandbox.models.ActivityType
 import ru.ravel.xsltsandbox.models.AppConfig
 import ru.ravel.xsltsandbox.models.DocSession
 import ru.ravel.xsltsandbox.models.TabState
@@ -23,6 +24,7 @@ import ru.ravel.xsltsandbox.models.bizrule.Quantifier
 import ru.ravel.xsltsandbox.ui.Dialogs.runWithProgress
 import ru.ravel.xsltsandbox.ui.Dialogs.showStatus
 import ru.ravel.xsltsandbox.ui.FileChoosers
+import ru.ravel.xsltsandbox.utils.LayoutUtil
 import ru.ravel.xsltsandbox.utils.TreeUtil.expandAll
 import ru.ravel.xsltsandbox.utils.TreeUtil.toTreeItem
 import ru.ravel.xsltsandbox.utils.XmlUtil
@@ -43,6 +45,22 @@ class SessionFiles(
 		loadFileIntoAreaAsync(session, path, session.xmlArea) {
 			session.xmlPath = it
 		}
+	}
+
+
+	fun openFormOrWaitFile(session: DocSession, path: Path): Boolean {
+		val mode = when (LayoutUtil.getActivityType(path.toFile())) {
+			ActivityType.FORM -> TransformMode.FM
+			ActivityType.WAIT -> TransformMode.WA
+			else -> return false
+		}
+		session.mode = mode
+		loadFileIntoAreaAsync(session, path, session.xsltArea) { session.xsltPath = it }
+		session.mappingPropertyFile = path
+		session.otherActivityPath = path
+		ctx.xsltRadio.isSelected = true
+		session.updateTabTitle()
+		return true
 	}
 
 

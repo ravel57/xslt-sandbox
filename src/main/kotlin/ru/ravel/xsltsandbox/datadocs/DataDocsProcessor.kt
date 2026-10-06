@@ -23,7 +23,9 @@ import ru.ravel.xsltsandbox.models.ReferredDocument
 import ru.ravel.xsltsandbox.models.bizrule.BizRule
 import ru.ravel.xsltsandbox.models.datamapping.DataMapping
 import ru.ravel.xsltsandbox.models.datasource.DataSource
+import ru.ravel.xsltsandbox.models.form.Form
 import ru.ravel.xsltsandbox.models.setvalue.SetValueActivity
+import ru.ravel.xsltsandbox.models.wait.Wait
 import ru.ravel.xsltsandbox.utils.LayoutUtil
 
 object DataDocsProcessor {
@@ -52,6 +54,22 @@ object DataDocsProcessor {
 			ActivityType.SET_VALUE -> {
 				return xmlMapper.readValue(propertyFile, SetValueActivity::class.java).referredDocuments?.documents
 					?.map { ReferredDocument(it.referenceName!!, it.access!!) }
+					?: emptyList()
+			}
+
+			ActivityType.FORM -> {
+				return xmlMapper.readValue(propertyFile, Form::class.java).referredDocuments?.documents
+					?.map { ReferredDocument(it.referenceName, it.access) }
+					?: emptyList()
+			}
+
+			ActivityType.WAIT -> {
+				return xmlMapper.readValue(propertyFile, Wait::class.java).referredDocuments?.items
+					?.mapNotNull { doc ->
+						val name = doc.referenceName ?: return@mapNotNull null
+						val access = doc.access ?: return@mapNotNull null
+						ReferredDocument(name, access)
+					}
 					?: emptyList()
 			}
 

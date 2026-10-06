@@ -170,6 +170,7 @@ class XmlXsltValidatorApp : Application() {
 			when (args[index]) {
 				"--input-xslt-path" -> files.openXsltFile(ctx.currentSession, path)
 				"--input-properties-path" -> files.openBrFile(ctx.currentSession, path)
+				"--input-activity-path" -> files.openFormOrWaitFile(ctx.currentSession, path)
 				"--input-data-path" -> files.openXmlFile(ctx.currentSession, path)
 				"--debug-port" -> args.getOrNull(index + 1)?.toIntOrNull()
 					?.takeIf { it in 1..65535 }
