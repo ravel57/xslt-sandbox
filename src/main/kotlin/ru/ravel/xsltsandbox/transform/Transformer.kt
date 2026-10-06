@@ -244,7 +244,10 @@ class Transformer(
 					val st = ctx.xmlMapper.readValue(path?.toFile(), SegmentationTree::class.java)
 					// корень ищем по MainFlow/Procedures: для ST из MainFlow он на уровень ближе, чем из Procedures
 					val rulesDir = path?.let { ProcessPaths.businessRulesDir(it) }
-					AppLog.info("ST ${path?.parent?.fileName}: правила из $rulesDir, вход ${xml.length} симв.")
+					AppLog.info(
+						"ST ${path?.parent?.fileName}: правила из $rulesDir, вход ${xml.length} симв., " +
+							"документы на входе: ${topLevelElements(xml)}",
+					)
 					// Выходы ST в Layout.xml названы по ConnectionID правила (а не по RuleID); первое сработавшее
 					// по ExecutionOrder правило задаёт выход, иначе — AllFalse.
 					val firstTrue = st.rules?.ruleList.orEmpty().sortedBy { it.executionOrder }.firstOrNull { ruleRef ->
@@ -365,4 +368,17 @@ class Transformer(
 		support.highlightAllMatches(session.xsltArea, state.query, false)
 		Platform.runLater { redrawXsltOverlay(session) }
 	}
+}
+
+
+/** Имена элементов верхнего уровня XML (для журнала); при ошибке разбора — её текст. */
+private fun topLevelElements(xml: String): String {
+	return runCatching {
+		val doc = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder()
+			.parse(org.xml.sax.InputSource(java.io.StringReader(xml)))
+		val children = doc.documentElement.childNodes
+		(0 until children.length).map { children.item(it) }
+			.filter { it.nodeType == org.w3c.dom.Node.ELEMENT_NODE }
+			.map { it.nodeName }
+	}.getOrElse { "не разобрать: ${it.message}" }.toString()
 }
