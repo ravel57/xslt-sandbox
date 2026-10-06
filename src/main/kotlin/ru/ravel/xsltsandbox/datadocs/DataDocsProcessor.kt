@@ -26,12 +26,15 @@ import ru.ravel.xsltsandbox.models.datasource.DataSource
 import ru.ravel.xsltsandbox.models.form.Form
 import ru.ravel.xsltsandbox.models.setvalue.SetValueActivity
 import ru.ravel.xsltsandbox.models.wait.Wait
+import ru.ravel.xsltsandbox.models.segmentationtree.BusinessRule as SegmentationBusinessRule
 import ru.ravel.xsltsandbox.utils.LayoutUtil
 
 object DataDocsProcessor {
 	private val xmlMapper = XmlMapper().registerKotlinModule()
 
 	fun getDataDocsInOut(propertyFile: File): List<ReferredDocument> {
+		// у открытого не из папки активности файла (например, правила) Properties.xml может не быть
+		if (!propertyFile.isFile) return emptyList()
 		val type = LayoutUtil.getActivityType(propertyFile)
 		when (type) {
 			ActivityType.BIZ_RULE -> {
@@ -72,6 +75,15 @@ object DataDocsProcessor {
 						ReferredDocument(name, access)
 					}
 					?: emptyList()
+			}
+
+			// Бизнес-правило из BusinessRules (правило ST): его документы перечислены по именам и нужны на вход
+			ActivityType.BUSINESS_RULE -> {
+				return xmlMapper.readValue(propertyFile, SegmentationBusinessRule::class.java).referredDocuments?.documents
+					.orEmpty()
+					.filter { it.isNotBlank() }
+					.distinct()
+					.map { ReferredDocument(it, "Input") }
 			}
 
 			else -> {

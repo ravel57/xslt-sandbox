@@ -99,14 +99,16 @@ class SessionFiles(
 	 */
 	fun openBrFile(session: DocSession, path: Path): Boolean {
 		// Properties.xml активности BR или файл бизнес-правила из BusinessRules (правила ST)
-		val xmlRule = if (LayoutUtil.getActivityType(path.toFile()) == ActivityType.BUSINESS_RULE) {
+		val isBusinessRule = LayoutUtil.getActivityType(path.toFile()) == ActivityType.BUSINESS_RULE
+		val xmlRule = if (isBusinessRule) {
 			ctx.xmlMapper.readValue(path.toFile(), BusinessRule::class.java).xmlRule
 				?: return false
 		} else {
 			ctx.xmlMapper.readValue(path.toFile(), BizRule::class.java).xmlRule.value
 		}
 		session.brPath = path
-		session.mappingPropertyFile = path.parent.resolve("Properties.xml")
+		// у правила из BusinessRules нет Properties.xml рядом: список его документов лежит в нём самом
+		session.mappingPropertyFile = if (isBusinessRule) path else path.parent.resolve("Properties.xml")
 		session.updateTabTitle()
 		return applyBrXml(session, StringEscapeUtils.unescapeXml(xmlRule))
 	}

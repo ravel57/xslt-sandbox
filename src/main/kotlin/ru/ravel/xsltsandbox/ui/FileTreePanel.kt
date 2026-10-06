@@ -152,7 +152,11 @@ class FileTreePanel(
 				session.mode = TransformMode.BR
 				ctx.brRadio.isSelected = true
 				session.brPath = item
-				session.mappingPropertyFile = item.parent.resolve("Properties.xml")
+				session.mappingPropertyFile = if (type == ActivityType.BUSINESS_RULE) {
+					item
+				} else {
+					item.parent.resolve("Properties.xml")
+				}
 				session.updateTabTitle()
 			}
 

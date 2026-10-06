@@ -43,4 +43,22 @@ class DataDocsProcessorTest {
 		)
 		assertEquals(listOf("A" to "Input", "B" to "InOut"), docs.map { it.referenceName to it.access })
 	}
+
+	@Test
+	fun `business rule from BusinessRules lists its own documents as inputs`() {
+		val file = dir.resolve("R1.xml")
+		Files.writeString(
+			file,
+			"<BusinessRule><BusinessRuleID>R1</BusinessRuleID><ReferredDocuments><Document>A</Document><Document>B</Document><Document>A</Document></ReferredDocuments><XmlRule>x</XmlRule></BusinessRule>",
+		)
+
+		val docs = DataDocsProcessor.getDataDocsInOut(file.toFile())
+
+		assertEquals(listOf("A" to "Input", "B" to "Input"), docs.map { it.referenceName to it.access })
+	}
+
+	@Test
+	fun `missing property file gives no documents instead of failing`() {
+		assertEquals(emptyList<Any>(), DataDocsProcessor.getDataDocsInOut(dir.resolve("BusinessRules/Properties.xml").toFile()))
+	}
 }
