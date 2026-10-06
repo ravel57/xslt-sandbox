@@ -33,6 +33,8 @@ import ru.ravel.xsltsandbox.models.form.Form
 import ru.ravel.xsltsandbox.models.procedurereturn.ProcedureReturn
 import ru.ravel.xsltsandbox.models.segmentationtree.BusinessRule
 import ru.ravel.xsltsandbox.models.segmentationtree.SegmentationTree
+import ru.ravel.xsltsandbox.log.AppLog
+import ru.ravel.xsltsandbox.utils.ProcessPaths
 import ru.ravel.xsltsandbox.models.wait.Wait
 import ru.ravel.xsltsandbox.ui.Dialogs.showChoiceDialog
 import ru.ravel.xsltsandbox.ui.Dialogs.showStatus
@@ -240,16 +242,18 @@ class Transformer(
 					val xml = ctx.currentSession.xmlArea.text
 					val path = ctx.currentSession.otherActivityPath
 					val st = ctx.xmlMapper.readValue(path?.toFile(), SegmentationTree::class.java)
-					val results = st.rules?.ruleList?.mapNotNull { rule ->
-						val file = path?.parent?.parent?.parent?.parent?.resolve("BusinessRules")
-							?.resolve("${rule.ruleID}.xml")
-							?.toFile()
-						if (file?.exists() == true) {
-							ctx.xmlMapper.readValue(file, BusinessRule::class.java)
-						} else {
-							null
+					// корень ищем по MainFlow/Procedures: для ST из MainFlow он на уровень ближе, чем из Procedures
+					val rulesDir = path?.let { ProcessPaths.businessRulesDir(it) }
+					AppLog.info("ST ${path?.parent?.fileName}: правила из $rulesDir, вход ${xml.length} симв.")
+					// Выходы ST в Layout.xml названы по ConnectionID правила (а не по RuleID); первое сработавшее
+					// по ExecutionOrder правило задаёт выход, иначе — AllFalse.
+					val firstTrue = st.rules?.ruleList.orEmpty().sortedBy { it.executionOrder }.firstOrNull { ruleRef ->
+						val file = rulesDir?.resolve("${ruleRef.ruleID}.xml")?.toFile()
+						if (file?.exists() != true) {
+							AppLog.warn("ST: файл правила ${ruleRef.ruleID} не найден ($file)")
+							return@firstOrNull false
 						}
-					}?.mapNotNull { rule ->
+						val rule = ctx.xmlMapper.readValue(file, BusinessRule::class.java)
 						val rootNode: Any = if (rule.xmlRule?.trim()?.startsWith("<Quantifier") == true) {
 							ctx.xmlMapper.readValue(rule.xmlRule, Quantifier::class.java)
 						} else {
@@ -270,18 +274,12 @@ class Transformer(
 
 							else -> false
 						}
-						if (result) {
-							rule.businessRuleID
-						} else {
-							null
-						}
+						AppLog.info("ST: правило ${ruleRef.ruleID} (выход ${ruleRef.connectionID}) = $result")
+						result
 					}
 
-					val stResult = if (results?.isNotEmpty() == true) {
-						results.first()
-					} else {
-						"AllFalse"
-					}
+					val stResult = firstTrue?.connectionID
+						?: "AllFalse"
 
 					Platform.runLater {
 						showStatus(owner, "ST result:\n$stResult")

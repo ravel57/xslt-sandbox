@@ -40,4 +40,13 @@ class ProcessPathsTest {
 		assertEquals(own, ProcessPaths.inRealProcess(real, own))
 		assertEquals(own, ProcessPaths.inRealProcess(null, own))
 	}
+
+	@Test
+	fun `business rules folder is found from procedures and main flow alike`() {
+		val real = process("real")
+		Files.createDirectories(real.resolve("MainFlow/ST_1"))
+
+		assertEquals(real.resolve("BusinessRules"), ProcessPaths.businessRulesDir(real.resolve("Procedures/Main/DS_1/Properties.xml")))
+		assertEquals(real.resolve("BusinessRules"), ProcessPaths.businessRulesDir(real.resolve("MainFlow/ST_1/Properties.xml")))
+	}
 }
