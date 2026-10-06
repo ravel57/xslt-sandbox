@@ -120,7 +120,7 @@ class ActivityDebugger(
 		val layout = try {
 			XmlMapper().readValue(layoutFile.toFile(), DiagramLayout::class.java)
 		} catch (e: Exception) {
-			showStatus(ctx.stage, "Failed to parse Layout.xml:\n${'$'}{e.message}")
+			showStatus(ctx.stage, "Failed to parse Layout.xml:\n${e.message}")
 			return
 		}
 
@@ -138,7 +138,7 @@ class ActivityDebugger(
 
 		val startName = selectedActivityPath.parent?.fileName?.toString()
 		val startUid = startName?.let { nameToUid[it] } ?: run {
-			showStatus(ctx.stage, "Cannot map start activity to Layout.xml element: ${'$'}startName")
+			showStatus(ctx.stage, "Cannot map start activity to Layout.xml element: $startName")
 			return
 		}
 
@@ -208,7 +208,7 @@ class ActivityDebugger(
 		dfs(startUid, mutableListOf(startUid), mutableSetOf(startUid))
 
 		if (allRoutes.isEmpty()) {
-			showStatus(ctx.stage, "No routes found from ${'$'}startName.")
+			showStatus(ctx.stage, "No routes found from $startName.")
 			return
 		}
 
@@ -234,13 +234,13 @@ class ActivityDebugger(
 		var i = 0
 		timeline.keyFrames.add(KeyFrame(Duration.millis(frameMs), javafx.event.EventHandler {
 			val st = steps[i]
-			ctx.currentSession.debugLastExitName.set("route ${'$'}{st.routeIdx}/${'$'}{allRoutes.size}, step ${'$'}{st.stepIdx}/${'$'}{st.totalSteps}")
+			ctx.currentSession.debugLastExitName.set("route ${st.routeIdx}/${allRoutes.size}, step ${st.stepIdx}/${st.totalSteps}")
 			ctx.currentSession.debugCurrentActivityProps.set(st.props)
 			i++
 		}))
 
 		timeline.setOnFinished {
-			showStatus(ctx.stage, "Run debug finished. Routes: ${'$'}{allRoutes.size}")
+			showStatus(ctx.stage, "Run debug finished. Routes: ${allRoutes.size}")
 		}
 
 		timeline.playFromStart()
