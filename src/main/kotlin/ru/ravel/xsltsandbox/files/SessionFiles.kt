@@ -19,6 +19,7 @@ import ru.ravel.xsltsandbox.models.DocSession
 import ru.ravel.xsltsandbox.models.TabState
 import ru.ravel.xsltsandbox.models.TransformMode
 import ru.ravel.xsltsandbox.models.bizrule.BizRule
+import ru.ravel.xsltsandbox.models.segmentationtree.BusinessRule
 import ru.ravel.xsltsandbox.models.bizrule.Connective
 import ru.ravel.xsltsandbox.models.bizrule.Quantifier
 import ru.ravel.xsltsandbox.ui.Dialogs.runWithProgress
@@ -97,11 +98,17 @@ class SessionFiles(
 	 * @return `false`, если в дерево нечего показывать
 	 */
 	fun openBrFile(session: DocSession, path: Path): Boolean {
-		val bizRule = ctx.xmlMapper.readValue(path.toFile(), BizRule::class.java)
+		// Properties.xml активности BR или файл бизнес-правила из BusinessRules (правила ST)
+		val xmlRule = if (LayoutUtil.getActivityType(path.toFile()) == ActivityType.BUSINESS_RULE) {
+			ctx.xmlMapper.readValue(path.toFile(), BusinessRule::class.java).xmlRule
+				?: return false
+		} else {
+			ctx.xmlMapper.readValue(path.toFile(), BizRule::class.java).xmlRule.value
+		}
 		session.brPath = path
 		session.mappingPropertyFile = path.parent.resolve("Properties.xml")
 		session.updateTabTitle()
-		return applyBrXml(session, StringEscapeUtils.unescapeXml(bizRule.xmlRule.value))
+		return applyBrXml(session, StringEscapeUtils.unescapeXml(xmlRule))
 	}
 
 
