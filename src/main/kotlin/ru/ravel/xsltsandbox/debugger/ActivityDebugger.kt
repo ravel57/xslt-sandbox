@@ -17,7 +17,7 @@ import kotlin.io.path.exists
 import kotlin.io.path.name
 import ru.ravel.xsltsandbox.AppContext
 import ru.ravel.xsltsandbox.debug.DebugStep
-import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.extractNeededDataDocs
+import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.inputDocuments
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.getDataDocsInOut
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.mergeMockWithDataDocs
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.replaceDataDocsInString
@@ -379,10 +379,8 @@ class ActivityDebugger(
 		nextActivityType: ActivityType,
 		nextActivityDir: Path,
 	) {
-		val nextActivityDataDocsInputs = getDataDocsInOut(nextActivityPropertiesPath.toFile())
-			.filter { it.access in arrayOf("Input", "InOut") }
-			.map { it.referenceName }
-		val neededDataDocs = extractNeededDataDocs(ctx.currentSession.dataDocs!!, nextActivityDataDocsInputs)
+		// ST получает все дата-документы: её правилам нужны разные
+		val neededDataDocs = inputDocuments(nextActivityPropertiesPath.toFile(), ctx.currentSession.dataDocs!!)
 		ctx.currentSession.xmlArea.replaceText(neededDataDocs)
 
 		if (nextActivityPropertiesPath.exists()) {

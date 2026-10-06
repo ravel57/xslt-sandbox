@@ -1,6 +1,7 @@
 package ru.ravel.xsltsandbox.datadocs
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
@@ -45,20 +46,29 @@ class DataDocsProcessorTest {
 	}
 
 	@Test
-	fun `business rule from BusinessRules lists its own documents as inputs`() {
-		val file = dir.resolve("R1.xml")
-		Files.writeString(
-			file,
-			"<BusinessRule><BusinessRuleID>R1</BusinessRuleID><ReferredDocuments><Document>A</Document><Document>B</Document><Document>A</Document></ReferredDocuments><XmlRule>x</XmlRule></BusinessRule>",
-		)
+	fun `missing property file gives no documents instead of failing`() {
+		assertEquals(emptyList<Any>(), DataDocsProcessor.getDataDocsInOut(dir.resolve("BusinessRules/Properties.xml").toFile()))
+	}
 
-		val docs = DataDocsProcessor.getDataDocsInOut(file.toFile())
+	private val allDocs = "<Data><A><x/></A><B><y/></B><C><z/></C></Data>"
 
-		assertEquals(listOf("A" to "Input", "B" to "Input"), docs.map { it.referenceName to it.access })
+	@Test
+	fun `ordinary activity gets only its input documents`() {
+		val file = bizRule("""<ReferredDocuments><ReferredDocument ReferenceName="B" Access="Input"/></ReferredDocuments>""")
+
+		val input = DataDocsProcessor.inputDocuments(file, allDocs)
+
+		assertTrue("<B>" in input && "<A>" !in input && "<C>" !in input, input)
 	}
 
 	@Test
-	fun `missing property file gives no documents instead of failing`() {
-		assertEquals(emptyList<Any>(), DataDocsProcessor.getDataDocsInOut(dir.resolve("BusinessRules/Properties.xml").toFile()))
+	fun `segmentation tree and its business rules get all documents`() {
+		val rule = dir.resolve("R1.xml")
+		Files.writeString(rule, "<BusinessRule><BusinessRuleID>R1</BusinessRuleID><ReferredDocuments><Document>A</Document></ReferredDocuments><XmlRule>x</XmlRule></BusinessRule>")
+		val tree = dir.resolve("ST.xml")
+		Files.writeString(tree, "<SegmentationTreeActivityDefinition ReferenceName=\"ST\"><Rules/></SegmentationTreeActivityDefinition>")
+
+		assertEquals(allDocs, DataDocsProcessor.inputDocuments(rule.toFile(), allDocs))
+		assertEquals(allDocs, DataDocsProcessor.inputDocuments(tree.toFile(), allDocs))
 	}
 }

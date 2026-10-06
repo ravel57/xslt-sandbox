@@ -16,8 +16,7 @@ import org.fxmisc.richtext.CodeArea
 import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid
 import org.kordamp.ikonli.javafx.FontIcon
 import ru.ravel.xsltsandbox.AppContext
-import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.extractNeededDataDocs
-import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.getDataDocsInOut
+import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.inputDocuments
 import ru.ravel.xsltsandbox.debugger.ActivityDebugger
 import ru.ravel.xsltsandbox.editor.CodeAreaSupport
 import ru.ravel.xsltsandbox.editor.SearchDialog
@@ -52,11 +51,7 @@ class ToolBarBuilder(
 		ctx.currentSession.dataDocs = XmlUtil.readXmlSafe(file)
 		val properties = ctx.currentSession.mappingPropertyFile?.toFile()
 		if (properties != null) {
-			val dataDocs = getDataDocsInOut(properties)
-				.filter { it.access in arrayOf("Input", "InOut") }
-				.map { it.referenceName }
-			val neededDataDocs = extractNeededDataDocs(ctx.currentSession.dataDocs!!, dataDocs)
-			ctx.currentSession.xmlArea.replaceText(neededDataDocs)
+			ctx.currentSession.xmlArea.replaceText(inputDocuments(properties, ctx.currentSession.dataDocs!!))
 		}
 	}
 
@@ -227,11 +222,7 @@ class ToolBarBuilder(
 							ctx.currentSession.dataDocs = area.text
 							val properties = ctx.currentSession.mappingPropertyFile?.toFile()
 							if (properties != null) {
-								val dataDocs = getDataDocsInOut(properties)
-									.filter { it.access in arrayOf("Input", "InOut") }
-									.map { it.referenceName }
-								val neededDataDocs = extractNeededDataDocs(ctx.currentSession.dataDocs!!, dataDocs)
-								ctx.currentSession.xmlArea.replaceText(neededDataDocs)
+								ctx.currentSession.xmlArea.replaceText(inputDocuments(properties, ctx.currentSession.dataDocs!!))
 							}
 							dlg.close()
 						}
