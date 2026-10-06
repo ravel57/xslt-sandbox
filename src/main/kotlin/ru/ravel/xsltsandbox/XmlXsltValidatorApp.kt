@@ -164,6 +164,7 @@ class XmlXsltValidatorApp : Application() {
 
 	private fun openInputArgs(args: List<String>) {
 		val callStack = mutableListOf<Path>()
+		var fullDataDocs: File? = null
 		for (index in args.indices) {
 			val path = File(args.getOrNull(index + 1).toString()).toPath()
 			when (args[index]) {
@@ -174,11 +175,14 @@ class XmlXsltValidatorApp : Application() {
 					?.takeIf { it in 1..65535 }
 					?.let { ctx.debugBridge = DebugBridge(it) }
 				"--call-stack-item" -> callStack.add(path)
+				"--input-full-datadocs-path" -> fullDataDocs = path.toFile()
 			}
 		}
 		if (callStack.isNotEmpty()) {
 			debugger.setInitialCallStack(ctx.currentSession, callStack)
 		}
+		// После остальных аргументов: подстановка входных документов нужна уже открытой активности.
+		fullDataDocs?.takeIf { it.isFile }?.let { toolBar.selectDataDocsFile(it) }
 	}
 }
 

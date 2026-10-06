@@ -1,6 +1,7 @@
 package ru.ravel.xsltsandbox.ui
 
 import java.nio.file.Files
+import java.io.File
 import javafx.event.ActionEvent
 import javafx.geometry.Insets
 import javafx.geometry.Orientation
@@ -53,6 +54,34 @@ class ToolBarBuilder(
 	private val debugger: ActivityDebugger,
 ) {
 	private val state get() = ctx.editor
+
+	/** Пункт «Select file» меню DataDocs: по нему же дата-доки можно загрузить без диалога (см. [selectDataDocsFile]). */
+	private var selectDataDocsFileItem: MenuItem? = null
+	private var pendingDataDocsFile: File? = null
+
+	/** Загружает файл в DataDocs текущей сессии и подставляет в XML входные документы активности. */
+	private fun loadDataDocsFile(file: File) {
+		ctx.currentSession.dataDocs = XmlUtil.readXmlSafe(file)
+		val properties = ctx.currentSession.mappingPropertyFile?.toFile()
+		if (properties != null) {
+			val dataDocs = getDataDocsInOut(properties)
+				.filter { it.access in arrayOf("Input", "InOut") }
+				.map { it.referenceName }
+			val neededDataDocs = extractNeededDataDocs(ctx.currentSession.dataDocs!!, dataDocs)
+			ctx.currentSession.xmlArea.replaceText(neededDataDocs)
+		}
+	}
+
+	/**
+	 * То же, что выбрать [file] в «DataDocs → Select file», только без диалога: загрузка, подстановка
+	 * входных документов и обновление кнопок отладчика (их обновляют обработчики пунктов меню).
+	 * Нужно для аргумента запуска `--input-full-datadocs-path`.
+	 */
+	fun selectDataDocsFile(file: File) {
+		val item = selectDataDocsFileItem ?: return
+		pendingDataDocsFile = file
+		item.fire()
+	}
 
 	fun build(): HBox {
 		val validateAntTransformBtn = Button().apply {
@@ -226,20 +255,15 @@ class ToolBarBuilder(
 
 			val fileItem = MenuItem("Select file").apply {
 				setOnAction {
-					val file = FileChoosers.create("Open DataDocs", null, "XML Files (*.xml)", "*.xml")
-						.showOpenDialog(ctx.stage)
+					// Файл уже известен, если пункт вызвали из selectDataDocsFile — тогда диалог не нужен.
+					val file = pendingDataDocsFile?.also { pendingDataDocsFile = null }
+						?: FileChoosers.create("Open DataDocs", null, "XML Files (*.xml)", "*.xml")
+							.showOpenDialog(ctx.stage)
 						?: return@setOnAction
-					ctx.currentSession.dataDocs = XmlUtil.readXmlSafe(file)
-					val properties = ctx.currentSession.mappingPropertyFile?.toFile()
-					if (properties != null) {
-						val dataDocs = getDataDocsInOut(properties)
-							.filter { it.access in arrayOf("Input", "InOut") }
-							.map { it.referenceName }
-						val neededDataDocs = extractNeededDataDocs(ctx.currentSession.dataDocs!!, dataDocs)
-						ctx.currentSession.xmlArea.replaceText(neededDataDocs)
-					}
+					loadDataDocsFile(file)
 				}
 			}
+			selectDataDocsFileItem = fileItem
 
 			val exportDataDocs = MenuItem("Export to file").apply {
 				setOnAction {
