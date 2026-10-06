@@ -35,8 +35,9 @@ object DataDocsProcessor {
 		val type = LayoutUtil.getActivityType(propertyFile)
 		when (type) {
 			ActivityType.BIZ_RULE -> {
-				return xmlMapper.readValue(propertyFile, BizRule::class.java).referredDocuments.documents
-					.map { ReferredDocument(it.referenceName, it.access) }
+				return xmlMapper.readValue(propertyFile, BizRule::class.java).referredDocuments?.documents
+					?.map { ReferredDocument(it.referenceName, it.access) }
+					?: emptyList()
 			}
 
 			ActivityType.DATA_MAPPING -> {

@@ -113,6 +113,8 @@ object AppLog {
 	}
 
 	private fun teeTo(original: PrintStream, level: String): PrintStream {
+		// Кодировка консоли: ею же пишут в System.err обработчики java.util.logging (JavaFX) — иначе кириллица портится.
+		val charset = java.nio.charset.Charset.defaultCharset()
 		val line = ByteArrayOutputStream()
 		val stream = object : OutputStream() {
 			override fun write(b: Int) {
@@ -125,11 +127,11 @@ object AppLog {
 			override fun flush() = original.flush()
 
 			private fun flushLine() {
-				val text = line.toString(StandardCharsets.UTF_8).trimEnd('\r')
+				val text = line.toString(charset).trimEnd('\r')
 				line.reset()
 				if (text.isNotEmpty()) write(level, text, null)
 			}
 		}
-		return PrintStream(stream, true, StandardCharsets.UTF_8)
+		return PrintStream(stream, true, charset)
 	}
 }

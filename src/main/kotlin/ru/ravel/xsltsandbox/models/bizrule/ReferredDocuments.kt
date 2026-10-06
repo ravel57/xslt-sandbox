@@ -7,5 +7,6 @@ import com.fasterxml.jackson.dataformat.xml.annotation.JacksonXmlProperty
 data class ReferredDocuments(
 	@JacksonXmlElementWrapper(useWrapping = false)
 	@JacksonXmlProperty(localName = "ReferredDocument")
-	val documents: List<ReferredDocument>
+	// пустой <ReferredDocuments/> приходит как null: Jackson строит такой объект без аргументов
+	val documents: List<ReferredDocument>? = null
 )

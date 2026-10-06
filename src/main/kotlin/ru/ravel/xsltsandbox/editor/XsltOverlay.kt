@@ -72,7 +72,10 @@ object XsltOverlay {
 		endEx: Int,
 		color: Color,
 	) {
-		if (start >= endEx) return
+		// Диапазоны считались по прошлому тексту: после смены документа они могут выходить за его конец.
+		val length = area.length
+		val endEx = minOf(endEx, length)
+		if (start !in 0..<endEx) return
 
 		val sPos = area.offsetToPosition(start, TwoDimensional.Bias.Forward)
 		val ePos = area.offsetToPosition(endEx, TwoDimensional.Bias.Backward)

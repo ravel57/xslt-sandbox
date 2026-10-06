@@ -10,7 +10,7 @@ data class BizRule(
 	val header: Header,
 
 	@JacksonXmlProperty(localName = "ReferredDocuments")
-	val referredDocuments: ReferredDocuments,
+	val referredDocuments: ReferredDocuments? = null,
 
 	@JacksonXmlProperty(localName = "XmlRule")
 	val xmlRule: XmlRule
