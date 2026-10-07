@@ -6,6 +6,7 @@ import javafx.application.Platform
 import javafx.stage.Stage
 import javax.xml.parsers.SAXParserFactory
 import javax.xml.transform.ErrorListener
+import javax.xml.transform.Templates
 import javax.xml.transform.TransformerException
 import javax.xml.transform.TransformerFactory
 import javax.xml.transform.stream.StreamResult
@@ -162,22 +163,35 @@ class Transformer(
 					}
 				}
 
-				val templates = try {
-					tfFactory.newTemplates(StreamSource(StringReader(s.xsltArea.text))).also {
-						status.append("XSLT compiled successfully.\n")
-						s.xsltSyntaxErrorRanges = saxonErrAcc + saxonFatalAcc
-						support.highlightAllMatches(s.xsltArea, state.query, false)
-						appendBadSelectWarnings(s, status)
-						saxonWarnAcc.addAll(s.xsltBadSelectRanges)
-						s.xsltWarningRanges = saxonWarnAcc
-						Platform.runLater {
-							val errs = s.xsltSyntaxErrorRanges.size
-							val warns = s.xsltWarningRanges.size
-							s.xsltStatusLabel?.text = "Errors: $errs, Warnings: $warns"
-							s.xsltStatusLabel?.isVisible = (errs + warns) > 0
-						}
+				val xsltText = s.xsltArea.text
+				val compatText = XsltCompat.asBackwardsCompatible(xsltText)
+				var compat = false
+
+				fun resetDiagnostics() {
+					saxonWarnAcc.clear()
+					saxonErrAcc.clear()
+					saxonFatalAcc.clear()
+				}
+
+				fun modeNote() = if (compat) " • режим XSLT 1.0" else ""
+
+				fun compile(text: String): Templates = tfFactory.newTemplates(StreamSource(StringReader(text))).also {
+					status.append(if (compat) "XSLT compiled successfully (режим совместимости с XSLT 1.0).\n" else "XSLT compiled successfully.\n")
+					s.xsltSyntaxErrorRanges = saxonErrAcc + saxonFatalAcc
+					support.highlightAllMatches(s.xsltArea, state.query, false)
+					appendBadSelectWarnings(s, status)
+					saxonWarnAcc.addAll(s.xsltBadSelectRanges)
+					s.xsltWarningRanges = saxonWarnAcc
+					val note = modeNote()
+					Platform.runLater {
+						val errs = s.xsltSyntaxErrorRanges.size
+						val warns = s.xsltWarningRanges.size
+						s.xsltStatusLabel?.text = "Errors: $errs, Warnings: $warns$note"
+						s.xsltStatusLabel?.isVisible = (errs + warns) > 0 || note.isNotEmpty()
 					}
-				} catch (ex: TransformerException) {
+				}
+
+				fun reportCompileFailure(ex: TransformerException) {
 					s.xsltSyntaxErrorRanges = saxonErrAcc + saxonFatalAcc
 					s.xsltWarningRanges = saxonWarnAcc + s.xsltBadSelectRanges
 					support.highlightAllMatches(s.xsltArea, state.query, false)
@@ -196,22 +210,60 @@ class Transformer(
 						redrawXsltOverlay(s)
 						showStatus(owner, status.toString())
 					}
-					throw ex
+				}
+
+				fun fallBackToCompat(reason: String) {
+					AppLog.info("XSLT: $reason — повтор в режиме совместимости с XSLT 1.0 (как у CRIF)")
+					status.append("NOTE: $reason — повтор в режиме совместимости с XSLT 1.0 (как в CRIF).\n")
+					resetDiagnostics()
+					compat = true
+				}
+
+				var templates = try {
+					compile(xsltText)
+				} catch (ex: TransformerException) {
+					if (compatText == null) {
+						reportCompileFailure(ex)
+						throw ex
+					}
+					fallBackToCompat("строгая компиляция XSLT 2.0 не прошла (${ex.message})")
+					try {
+						compile(compatText)
+					} catch (ex2: TransformerException) {
+						reportCompileFailure(ex2)
+						throw ex2
+					}
 				}
 
 				val writer = StringWriter()
-				try {
-					templates.newTransformer().apply {
+				fun transformOnce(t: Templates): TransformerException? = try {
+					t.newTransformer().apply {
 						errorListener = tfFactory.errorListener
 					}.transform(
 						StreamSource(StringReader(s.xmlArea.text)),
 						StreamResult(writer)
 					)
+					null
 				} catch (ex: TransformerException) {
-					System.err.println(ex.localizedMessage)
+					ex
 				}
 
+				var failure = transformOnce(templates)
+				if (failure != null && !compat && compatText != null) {
+					fallBackToCompat("ошибка выполнения XSLT 2.0 (${failure.message})")
+					writer.buffer.setLength(0)
+					templates = try {
+						compile(compatText)
+					} catch (ex2: TransformerException) {
+						reportCompileFailure(ex2)
+						throw ex2
+					}
+					failure = transformOnce(templates)
+				}
+				failure?.let { System.err.println(it.localizedMessage) }
+
 				val resultText = writer.toString()
+				val note = modeNote()
 				Platform.runLater {
 					s.resultArea.replaceText(resultText)
 					support.highlightAllMatches(s.resultArea, state.query, true)
@@ -230,8 +282,9 @@ class Transformer(
 							}
 							append("Warnings: $warns")
 						}
+						append(note)
 					}
-					s.xsltStatusLabel?.isVisible = (errs + warns) > 0
+					s.xsltStatusLabel?.isVisible = (errs + warns) > 0 || note.isNotEmpty()
 					if (errs > 0) {
 						showStatus(owner, status.toString())
 					}
