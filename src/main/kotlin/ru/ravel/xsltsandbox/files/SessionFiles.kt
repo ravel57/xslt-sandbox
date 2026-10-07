@@ -18,6 +18,7 @@ import ru.ravel.xsltsandbox.models.AppConfig
 import ru.ravel.xsltsandbox.models.DocSession
 import ru.ravel.xsltsandbox.models.TabState
 import ru.ravel.xsltsandbox.models.TransformMode
+import ru.ravel.xsltsandbox.br.RuleParser
 import ru.ravel.xsltsandbox.models.bizrule.BizRule
 import ru.ravel.xsltsandbox.models.segmentationtree.BusinessRule
 import ru.ravel.xsltsandbox.models.bizrule.Connective
@@ -121,11 +122,7 @@ class SessionFiles(
 	 * @return `false`, если у сессии нет дерева
 	 */
 	fun applyBrXml(session: DocSession, innerXml: String): Boolean {
-		val rootNode: Any = if (innerXml.trim().startsWith("<Quantifier")) {
-			ctx.xmlMapper.readValue(innerXml, Quantifier::class.java)
-		} else {
-			ctx.xmlMapper.readValue(innerXml, Connective::class.java)
-		}
+		val rootNode: Any = RuleParser.parse(ctx.xmlMapper, innerXml)
 
 		when (rootNode) {
 			is Quantifier -> {

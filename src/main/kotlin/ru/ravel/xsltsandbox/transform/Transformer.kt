@@ -17,6 +17,7 @@ import org.xml.sax.SAXParseException
 import org.xml.sax.helpers.DefaultHandler
 import ru.ravel.xsltsandbox.AppContext
 import ru.ravel.xsltsandbox.br.BizRuleEvaluator
+import ru.ravel.xsltsandbox.br.RuleParser
 import ru.ravel.xsltsandbox.br.BizRuleEvaluator.evalQuantifier
 import ru.ravel.xsltsandbox.br.BizRuleEvaluator.evaluateBR
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.applySetValues
@@ -259,11 +260,7 @@ class Transformer(
 							return@firstOrNull false
 						}
 						val rule = ctx.xmlMapper.readValue(file, BusinessRule::class.java)
-						val rootNode: Any = if (rule.xmlRule?.trim()?.startsWith("<Quantifier") == true) {
-							ctx.xmlMapper.readValue(rule.xmlRule, Quantifier::class.java)
-						} else {
-							ctx.xmlMapper.readValue(rule.xmlRule, Connective::class.java)
-						}
+						val rootNode: Any = RuleParser.parse(ctx.xmlMapper, rule.xmlRule.orEmpty())
 						val result = when (rootNode) {
 							is Connective -> {
 								evaluateBR(xml, rootNode)

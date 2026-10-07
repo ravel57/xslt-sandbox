@@ -7,6 +7,7 @@ import kotlin.io.path.name
 import net.sf.saxon.s9api.Processor
 import net.sf.saxon.s9api.XPathCompiler
 import net.sf.saxon.s9api.XdmNode
+import ru.ravel.xsltsandbox.models.bizrule.ChildKind
 import ru.ravel.xsltsandbox.models.bizrule.Connective
 import ru.ravel.xsltsandbox.models.bizrule.Predicate
 import ru.ravel.xsltsandbox.models.bizrule.Quantifier
@@ -40,6 +41,43 @@ object BizRuleEvaluator {
 	}
 
 
+	/** Операнды предиката: переменная и вторая переменная либо константа. null — предикат задан неполно. */
+	private fun operands(p: Predicate, vmap: Map<String, String>): Pair<String, String>? {
+		val vars = p.variables.map { it.value }
+		return when {
+			vars.size >= 2 -> (vmap[vars[0]] ?: "") to (vmap[vars[1]] ?: "")
+			vars.size == 1 && p.constant != null -> (vmap[vars[0]] ?: "") to (p.constant?.value ?: "")
+			else -> null
+		}
+	}
+
+	private fun number(text: String): Double? = text.trim().replace(',', '.').toDoubleOrNull()
+
+	/** Числовое сравнение; если число не разобралось, итог — [whenUnparsable] (для «не равно» — true, как раньше). */
+	private fun numeric(
+		p: Predicate,
+		vmap: Map<String, String>,
+		whenUnparsable: Boolean = false,
+		test: (Double, Double) -> Boolean,
+	): Boolean {
+		val (left, right) = operands(p, vmap) ?: return false
+		val a = number(left)
+		val b = number(right)
+		return if (a == null || b == null) whenUnparsable else test(a, b)
+	}
+
+	/** Сравнение строк (ординально, без пробелов по краям); [test] получает знак compareTo. */
+	private fun textOrder(p: Predicate, vmap: Map<String, String>, test: (Int) -> Boolean): Boolean {
+		val (left, right) = operands(p, vmap) ?: return false
+		return test(left.trim().compareTo(right.trim()))
+	}
+
+	private fun strings(p: Predicate, vmap: Map<String, String>, test: (String, String) -> Boolean): Boolean {
+		val (left, right) = operands(p, vmap) ?: return false
+		return test(left, right)
+	}
+
+
 	private fun evalPredicate(
 		p: Predicate,
 		compiler: XPathCompiler,
@@ -47,30 +85,16 @@ object BizRuleEvaluator {
 		vmap: Map<String, String>,
 	): Boolean {
 		return when (kindOf(p.type)) {
-			"true" -> {
-				true
-			}
-
-			"false" -> {
-				false
-			}
+			"true" -> true
+			"false" -> false
 
 			"textequality" -> {
 				val vars = p.variables.map { it.value }
 				val constVal = p.constant?.value ?: ""
-
 				when {
-					vars.size == 1 && constVal.isNotEmpty() -> {
-						(vmap[vars[0]] ?: "") == constVal
-					}
-
-					vars.size == 2 -> {
-						(vmap[vars[0]] ?: "") == (vmap[vars[1]] ?: "")
-					}
-
-					else -> {
-						false
-					}
+					vars.size == 1 && constVal.isNotEmpty() -> (vmap[vars[0]] ?: "") == constVal
+					vars.size == 2 -> (vmap[vars[0]] ?: "") == (vmap[vars[1]] ?: "")
+					else -> false
 				}
 			}
 
@@ -78,111 +102,29 @@ object BizRuleEvaluator {
 				val vars = p.variables.map { it.value }
 				val constVal = p.constant?.value ?: ""
 				when (vars.size) {
-					1 -> {
-						(vmap[vars[0]] ?: "").trim() != constVal.trim()
-					}
-
-					2 -> {
-						(vmap[vars[0]] ?: "").trim() != (vmap[vars[1]] ?: "").trim()
-					}
-
-					else -> {
-						false
-					}
-				}
-			}
-
-			"numberequality" -> {
-				val vars = p.variables.map { it.value }
-				val constVal = p.constant?.value?.toDoubleOrNull()
-				if (vars.size == 1 && constVal != null) {
-					(vmap[vars[0]] ?: "").toDoubleOrNull() == constVal
-				} else {
-					false
-				}
-			}
-
-			"numberinequality" -> {
-				val vars = p.variables.map { it.value }
-				val constVal = p.constant?.value?.toDoubleOrNull()
-				if (vars.size == 1 && constVal != null) {
-					(vmap[vars[0]] ?: "").toDoubleOrNull() != constVal
-				} else {
-					false
-				}
-			}
-
-			"greaterthan" -> {
-				val vars = p.variables.map { it.value }
-				val constVal = p.constant?.value?.toDoubleOrNull()
-				if (vars.size == 1 && constVal != null) {
-					(vmap[vars[0]] ?: "").toDoubleOrNull()?.let { it > constVal } ?: false
-				} else {
-					false
-				}
-			}
-
-			"lessthan" -> {
-				val vars = p.variables.map { it.value }
-				val constVal = p.constant?.value?.toDoubleOrNull()
-				if (vars.size == 1 && constVal != null) {
-					(vmap[vars[0]] ?: "").toDoubleOrNull()?.let { it < constVal } ?: false
-				} else {
-					false
-				}
-			}
-
-			"textgreaterthanorequal" -> {
-				val vars = p.variables.map { it.value }
-				val constVal = p.constant?.value ?: ""
-
-				fun cmp(a: String, b: String): Int =
-					a.trim().compareTo(b.trim())
-
-				when (vars.size) {
-					1 -> cmp(vmap[vars[0]] ?: "", constVal) >= 0
-					2 -> cmp(vmap[vars[0]] ?: "", vmap[vars[1]] ?: "") >= 0
+					1 -> (vmap[vars[0]] ?: "").trim() != constVal.trim()
+					2 -> (vmap[vars[0]] ?: "").trim() != (vmap[vars[1]] ?: "").trim()
 					else -> false
 				}
 			}
 
-			"numbergreaterthan" -> {
-				val vars = p.variables.map { it.value }
-				val constVal = p.constant?.value ?: ""
+			"textlessthan" -> textOrder(p, vmap) { it < 0 }
+			"textlessthanorequal" -> textOrder(p, vmap) { it <= 0 }
+			"textgreaterthan" -> textOrder(p, vmap) { it > 0 }
+			"textgreaterthanorequal" -> textOrder(p, vmap) { it >= 0 }
 
-				fun toNum(s: String): Double? =
-					s.trim().replace(',', '.').toDoubleOrNull()
+			"numberequality" -> numeric(p, vmap) { a, b -> a == b }
+			"numberinequality" -> numeric(p, vmap, whenUnparsable = true) { a, b -> a != b }
+			"numbergreaterthan", "greaterthan" -> numeric(p, vmap) { a, b -> a > b }
+			"numbergreaterthanorequal" -> numeric(p, vmap) { a, b -> a >= b }
+			"numberlessthan", "lessthan" -> numeric(p, vmap) { a, b -> a < b }
+			"numberlessthanorequal" -> numeric(p, vmap) { a, b -> a <= b }
 
-				fun gt(a: String, b: String): Boolean {
-					val na = toNum(a)
-					val nb = toNum(b)
-					return na != null && nb != null && na > nb
-				}
+			"stringstartswith" -> strings(p, vmap) { a, b -> a.startsWith(b) }
+			"stringendswith" -> strings(p, vmap) { a, b -> a.endsWith(b) }
+			"stringcontains" -> strings(p, vmap) { a, b -> a.contains(b) }
 
-				when (vars.size) {
-					1 -> gt(vmap[vars[0]] ?: "", constVal)
-					2 -> gt(vmap[vars[0]] ?: "", vmap[vars[1]] ?: "")
-					else -> false
-				}
-			}
-
-			"numbergreaterthan" -> {
-				val vars = p.variables.map { it.value }
-
-				fun toNum(s: String): Double? =
-					s.trim().replace(',', '.').toDoubleOrNull()
-
-				if (vars.size < 2) return false
-
-				val left = toNum(vmap[vars[0]] ?: "") ?: return false
-				val right = toNum(vmap[vars[1]] ?: "") ?: return false
-
-				left > right
-			}
-
-			else -> {
-				false
-			}
+			else -> false
 		}
 	}
 
@@ -235,12 +177,47 @@ object BizRuleEvaluator {
 	}
 
 
+	/**
+	 * `IfThenElse`: первый дочерний элемент — условие, второй — «то», третий — «иначе» (порядок — как в документе).
+	 * Без «иначе» связка истинна при ложном условии (импликация).
+	 */
+	private fun evalIfThenElse(
+		c: Connective,
+		compiler: XPathCompiler,
+		doc: XdmNode,
+		vmap: Map<String, String>,
+	): Boolean {
+		val preds = c.predicates.orEmpty()
+		val quants = c.quantifiers.orEmpty()
+		val conns = c.connectives.orEmpty()
+		val order = c.childOrder.takeIf { it.size == preds.size + quants.size + conns.size }
+			?: (preds.map { ChildKind.PREDICATE } + quants.map { ChildKind.QUANTIFIER } + conns.map { ChildKind.CONNECTIVE })
+		var p = 0
+		var q = 0
+		var k = 0
+		val parts: List<() -> Boolean> = order.map { kind ->
+			when (kind) {
+				ChildKind.PREDICATE -> preds[p++].let { x -> { evalPredicate(x, compiler, doc, vmap) } }
+				ChildKind.QUANTIFIER -> quants[q++].let { x -> { evalQuantifier(x, compiler, doc, vmap) } }
+				ChildKind.CONNECTIVE -> conns[k++].let { x -> { evalConnective(x, compiler, doc, vmap) } }
+			}
+		}
+		return when (parts.size) {
+			0 -> true
+			1 -> parts[0]()
+			2 -> if (parts[0]()) parts[1]() else true
+			else -> if (parts[0]()) parts[1]() else parts[2]()
+		}
+	}
+
+
 	private fun evalConnective(
 		c: Connective,
 		compiler: XPathCompiler,
 		doc: XdmNode,
 		vmap: Map<String, String> = emptyMap(),
 	): Boolean {
+		if (kindOf(c.type) == "ifthenelse") return evalIfThenElse(c, compiler, doc, vmap)
 		val preds = c.predicates.orEmpty()
 		val quants = c.quantifiers.orEmpty()
 		val conns = c.connectives.orEmpty()
@@ -305,8 +282,10 @@ object BizRuleEvaluator {
 
 
 	private val SUPPORTED_PREDICATES = setOf(
-		"true", "false", "textequality", "textinequality", "numberequality", "numberinequality",
-		"greaterthan", "lessthan", "textgreaterthanorequal", "numbergreaterthan",
+		"true", "false", "textequality", "textinequality", "textlessthan", "textlessthanorequal", "textgreaterthan",
+		"textgreaterthanorequal", "numberequality", "numberinequality", "numbergreaterthan", "numbergreaterthanorequal",
+		"numberlessthan", "numberlessthanorequal", "greaterthan", "lessthan",
+		"stringstartswith", "stringendswith", "stringcontains",
 	)
 
 

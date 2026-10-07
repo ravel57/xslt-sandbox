@@ -23,9 +23,7 @@ import ru.ravel.xsltsandbox.xml.XPathSupport.buildDocForXPath
 import ru.ravel.xsltsandbox.xml.XPathSupport.setDefaultNsFromDoc
 import java.io.StringWriter
 
-/**
- * Построение и выполнение XPath по XML и результату.
- */
+
 class XPathTools(private val ctx: AppContext) {
 	private var editorDialog: Stage? = null
 
@@ -46,8 +44,7 @@ class XPathTools(private val ctx: AppContext) {
 			dlg.requestFocus()
 			return
 		}
-		/* ─────────────── GUI ─────────────── */
-		/** одна строка «имя + ChoiceBox» */
+
 		fun segRow(seg: SegMeta): HBox {
 			val lbl = Label(seg.name)
 			val cb = ChoiceBox<String>()
@@ -121,7 +118,6 @@ class XPathTools(private val ctx: AppContext) {
 
 
 	fun executeXpath(primaryStage: Stage) {
-		// ───────── создание диалога ─────────
 		val dlg = Stage().apply {
 			initOwner(primaryStage)
 			initModality(Modality.WINDOW_MODAL)
@@ -144,7 +140,6 @@ class XPathTools(private val ctx: AppContext) {
 
 		val runBtn = Button("Run")
 		val closeBtn = Button("Close")
-		// ───────── выполнение XPath ─────────
 		runBtn.setOnAction {
 			val xmlText = if (resultRadio.isSelected) {
 				ctx.currentSession.resultArea.text
