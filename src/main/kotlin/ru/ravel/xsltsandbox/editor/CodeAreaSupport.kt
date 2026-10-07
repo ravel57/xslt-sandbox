@@ -231,11 +231,11 @@ class CodeAreaSupport(private val ctx: AppContext) {
 		val after = before?.let { text.indexOf('>', it).takeIf { i -> i >= 0 } }
 		if (before != null && after != null) {
 			val fragment = text.substring(before, after + 1)
-			val mOpen = OPEN_TAG_REGEX.matchEntire(fragment)?.takeUnless { fragment.endsWith("/>") }
+			val openName = XmlMarkupScanner.openTagName(fragment)
 			val mClose = CLOSE_TAG_REGEX.matchEntire(fragment)
-			if (mOpen != null) {
+			if (openName != null) {
 				// курсор на открывающем
-				val matcher = tagPattern(mOpen.groupValues[1]).matcher(text)
+				val matcher = tagPattern(openName).matcher(text)
 					.region(after + 1, minOf(text.length, after + 1 + PAIR_SEARCH_LIMIT))
 				var depth = 0
 				while (matcher.find()) {
@@ -448,22 +448,19 @@ class CodeAreaSupport(private val ctx: AppContext) {
 
 		val result = HashMap<Int, FoldRange>()
 		val stack = ArrayList<Open>()
-		val m = TAG_SCAN_PATTERN.matcher(text)
 		var pos = 0
 		var line = 0
-		while (m.find()) {
-			for (i in pos until m.start()) if (text[i] == '\n') line++
-			pos = m.start()
-			val name = m.group(2)
+		XmlMarkupScanner.scan(text) { start, end, name, closing, selfClosing ->
+			for (i in pos until start) if (text[i] == '\n') line++
 			if (name != null) {
-				val closing = m.group(1).isNotEmpty()
-				val selfClosing = m.group(3).isNotEmpty()
 				if (closing) {
 					val at = stack.indexOfLast { it.name == name }
 					if (at >= 0) {
 						val open = stack[at]
 						while (stack.size > at) stack.removeAt(stack.size - 1)
-						val endLine = line + text.substring(m.start(), m.end()).count { it == '\n' }
+						var tagLines = 0
+						for (k in start until end) if (text[k] == '\n') tagLines++
+						val endLine = line + tagLines
 						if (endLine > open.line) {
 							val prev = result[open.line]
 							if (prev == null || open.offset < prev.startOffset) {
@@ -472,12 +469,12 @@ class CodeAreaSupport(private val ctx: AppContext) {
 						}
 					}
 				} else if (!selfClosing) {
-					stack += Open(name, line, m.start())
+					stack += Open(name, line, start)
 				}
 			}
 			// переводы строк внутри самого совпадения (многострочные теги, комментарии)
-			for (i in m.start() until m.end()) if (text[i] == '\n') line++
-			pos = m.end()
+			for (k in start until end) if (text[k] == '\n') line++
+			pos = end
 		}
 		return result
 	}
@@ -740,15 +737,8 @@ class CodeAreaSupport(private val ctx: AppContext) {
 		)
 		private val STYLE_CACHE = HashMap<Int, Collection<String>>()
 
-		/** Теги и «служебные» конструкции: группы — 1: `/` у закрывающего, 2: имя, 3: `/` у самозакрывающегося */
-		private val TAG_SCAN_PATTERN: Pattern = Pattern.compile(
-			"<!--[\\s\\S]*?-->|<!\\[CDATA\\[[\\s\\S]*?]]>|<\\?[\\s\\S]*?\\?>|<![^>]*>" +
-				"|<(/?)([A-Za-z_][\\w:.-]*)(?:\"[^\"]*\"|'[^']*'|[^>\"'])*?(/?)>"
-		)
-
 		private val NAN_REGEX = Regex("\\bNaN\\b")
 		// значения атрибутов могут содержать «/» (пути XPath), поэтому кавычки разбираются отдельно
-		private val OPEN_TAG_REGEX = Regex("<([A-Za-z_][\\w:.-]*)(?:\"[^\"]*\"|'[^']*'|[^>\"'])*>")
 		private val CLOSE_TAG_REGEX = Regex("</([A-Za-z_][\\w:.-]*)\\s*>")
 		private val SELF_CLOSING_REGEX = Regex("<([A-Za-z_][\\w:.-]*)[^>]*/>")
 	}
