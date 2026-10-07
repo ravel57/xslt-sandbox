@@ -51,4 +51,8 @@ class AppContext {
 	var refreshActivityButtons: () -> Unit = {}
 
 	var rebuildFileTree: (String) -> Unit = {}
+
+	var pendingLoads = 0
+
+	var autoRunning = false
 }

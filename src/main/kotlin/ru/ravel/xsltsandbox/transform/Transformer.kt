@@ -289,8 +289,12 @@ class Transformer(
 					val stResult = firstTrue?.connectionID
 						?: "AllFalse"
 
-					Platform.runLater {
-						showStatus(owner, "ST result:\n$stResult")
+					if (ctx.autoRunning) {
+						AppLog.info("ST: выход $stResult")
+					} else {
+						Platform.runLater {
+							showStatus(owner, "ST result:\n$stResult")
+						}
 					}
 
 					return stResult

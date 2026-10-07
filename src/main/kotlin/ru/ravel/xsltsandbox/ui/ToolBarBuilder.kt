@@ -200,8 +200,11 @@ class ToolBarBuilder(
 		}
 
 		val runDebugBtn = Button("Run debug").apply {
-			tooltip = Tooltip("Run debugger through all possible routes (requires DataDocs)")
-			setOnAction { debugger.runDebugAllPaths() }
+			tooltip = Tooltip("Выполнять активности подряд до следующей формы или вейта (нужны DataDocs). Во время прогона кнопка — «Stop»")
+			setOnAction { if (debugger.isAutoRunning) debugger.stopAutoRun() else debugger.runUntilFormOrWait() }
+		}
+		debugger.onAutoRunStateChanged = { running ->
+			runDebugBtn.text = if (running) "Stop" else "Run debug"
 		}
 
 		val dataDocsActivityBtn = MenuButton().apply {
@@ -270,7 +273,7 @@ class ToolBarBuilder(
 			val xsltLoaded = ctx.currentSession.xsltPath != null
 			val brLoaded = ctx.currentSession.brRoot != null || ctx.currentSession.brRootQuant != null
 			nextActivityBtn.isDisable = !(xsltLoaded || brLoaded)
-			runDebugBtn.isDisable = ctx.currentSession.dataDocs.isNullOrBlank() || !(xsltLoaded || brLoaded)
+			runDebugBtn.isDisable = !debugger.isAutoRunning && (ctx.currentSession.dataDocs.isNullOrBlank() || !(xsltLoaded || brLoaded))
 		}
 		ctx.refreshActivityButtons = { updateActivityButtons() }
 

@@ -185,6 +185,16 @@ class SessionFiles(
 			}
 		}
 
+		ctx.pendingLoads++
+		task.stateProperty().addListener { _, _, state ->
+			if (state == javafx.concurrent.Worker.State.SUCCEEDED ||
+				state == javafx.concurrent.Worker.State.FAILED ||
+				state == javafx.concurrent.Worker.State.CANCELLED
+			) {
+				ctx.pendingLoads--
+			}
+		}
+
 		runWithProgress(ctx.stage, "Opening ${path.fileName}", task) { text ->
 			text ?: return@runWithProgress
 			if (area === session.xsltArea) session.xsltEncoding = encoding

@@ -203,10 +203,21 @@ class XmlXsltValidatorApp : Application() {
 		}
 		val input = dataPath
 		if (input != null) {
-			files.openXmlFile(ctx.currentSession, input) { applyFullDataDocs() }
+			files.openXmlFile(ctx.currentSession, input) { afterLoads(::applyFullDataDocs) }
 		} else {
-			applyFullDataDocs()
+			afterLoads(::applyFullDataDocs)
 		}
+	}
+
+
+	private fun afterLoads(action: () -> Unit, deadline: Long = System.currentTimeMillis() + 15_000L) {
+		if (ctx.pendingLoads <= 0 || System.currentTimeMillis() > deadline) {
+			action()
+			return
+		}
+		javafx.animation.PauseTransition(javafx.util.Duration.millis(30.0)).apply {
+			setOnFinished { afterLoads(action, deadline) }
+		}.play()
 	}
 }
 
