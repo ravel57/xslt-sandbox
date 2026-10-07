@@ -229,6 +229,7 @@ class SessionFiles(
 			if (Files.exists(path)) {
 				loadFileIntoAreaAsync(session, path, session.xsltArea) { loaded ->
 					session.xsltPath = loaded
+					session.mappingPropertyFile = loaded.parent.resolve("Properties.xml")
 					session.updateTabTitle()
 				}
 			}

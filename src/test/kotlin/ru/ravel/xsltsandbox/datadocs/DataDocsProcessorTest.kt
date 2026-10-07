@@ -96,4 +96,34 @@ class DataDocsProcessorTest {
 		assertTrue("<v>new</v>" in merged && "old" !in merged, merged)
 		assertEquals(listOf("B", "A"), DataDocsProcessor.topLevelNameList(merged))
 	}
+
+	private fun properties(folder: Path, output: String): Path {
+		Files.createDirectories(folder)
+		val file = folder.resolve("Properties.xml")
+		Files.writeString(
+			file,
+			"""<BizRuleActivityDefinition ReferenceName="X">
+			|  <Header>
+			|    <DisplayName><MnemonicId>X</MnemonicId></DisplayName>
+			|    <Description><MnemonicId>d</MnemonicId></Description>
+			|    <SkipTracing>false</SkipTracing>
+			|    <AuditBusinessData>false</AuditBusinessData>
+			|  </Header>
+			|  <ReferredDocuments><ReferredDocument ReferenceName="$output" Access="Output"/><ReferredDocument ReferenceName="In" Access="Input"/></ReferredDocuments>
+			|  <XmlRule>true()</XmlRule>
+			|</BizRuleActivityDefinition>""".trimMargin(),
+		)
+		return file
+	}
+
+	@Test
+	fun `outputs come from the properties next to the activity xslt, not from the first opened activity`() {
+		val first = properties(dir.resolve("DM_first"), "SystemData")
+		properties(dir.resolve("DS_current"), "ApplicationData")
+
+		assertEquals(listOf("ApplicationData"), DataDocsProcessor.outputDocs(dir.resolve("DS_current/MappingOutput.xslt"), first))
+		// нет Properties.xml рядом с XSLT — берётся запасной
+		assertEquals(listOf("SystemData"), DataDocsProcessor.outputDocs(dir.resolve("nowhere/Mapping.xslt"), first))
+		assertEquals(emptyList<String>(), DataDocsProcessor.outputDocs(null, null))
+	}
 }

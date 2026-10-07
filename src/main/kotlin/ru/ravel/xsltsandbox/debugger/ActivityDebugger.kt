@@ -297,14 +297,10 @@ class ActivityDebugger(
 		val nextActivityType = LayoutUtil.getActivityType(nextActivityPropertiesPath.toFile())
 
 		if (ctx.currentSession.mode == TransformMode.XSLT) {
-			val currentProps = ctx.currentSession.mappingPropertyFile?.toFile()
-
-			val dataDocsOutputs = currentProps?.let { props ->
-				getDataDocsInOut(props)
-					.filter { it.access in arrayOf("InOut", "Output") }
-					.map { it.referenceName }
-					.distinct()
-			} ?: emptyList()
+			val dataDocsOutputs = DataDocsProcessor.outputDocs(
+				ctx.currentSession.xsltPath,
+				ctx.currentSession.mappingPropertyFile,
+			)
 
 			if (dataDocsOutputs.isNotEmpty()) {
 				val before = ctx.currentSession.dataDocs!!

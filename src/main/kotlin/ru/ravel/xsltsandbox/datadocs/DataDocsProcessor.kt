@@ -207,6 +207,16 @@ object DataDocsProcessor {
 	}
 
 
+	fun outputDocs(xslt: java.nio.file.Path?, fallback: java.nio.file.Path?): List<String> {
+		val own = xslt?.parent?.resolve("Properties.xml")?.toFile()?.takeIf { it.isFile }
+		val properties = own ?: fallback?.toFile() ?: return emptyList()
+		return getDataDocsInOut(properties)
+			.filter { it.access in arrayOf("InOut", "Output") }
+			.map { it.referenceName }
+			.distinct()
+	}
+
+
 	/** Имена документов верхнего уровня в [xml]; если корень сам не `Data`, а документ — его имя. Ошибка разбора — пусто. */
 	fun topLevelNameList(xml: String): List<String> = runCatching {
 		val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder()
