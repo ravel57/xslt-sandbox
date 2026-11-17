@@ -8,6 +8,7 @@ import javafx.scene.input.KeyEvent
 import javafx.scene.layout.BorderPane
 import javafx.stage.Stage
 import ru.ravel.xsltsandbox.config.ConfigStore
+import ru.ravel.xsltsandbox.connector.ConnectorConfigStore
 import ru.ravel.xsltsandbox.datadocs.MockXmlEditor
 import ru.ravel.xsltsandbox.debug.DebugBridge
 import ru.ravel.xsltsandbox.debugger.ActivityDebugger
@@ -152,6 +153,7 @@ class XmlXsltValidatorApp : Application() {
 
 				else -> showXsltBox(session, true)
 			}
+			ctx.refreshActivityButtons()
 		}
 		return first
 	}
@@ -187,6 +189,11 @@ class XmlXsltValidatorApp : Application() {
 					?.let { ctx.debugBridge = DebugBridge(it) }
 				"--call-stack-item" -> callStack.add(path)
 				"--input-full-datadocs-path" -> fullDataDocs = path.toFile()
+				"--input-connector-jar-path" -> {
+					val store = ConnectorConfigStore()
+					store.save(store.load().copy(classpathEntries = listOf(path.toString())))
+					AppLog.info("classpath проверяемого коннектора (jar) из аргумента запуска: $path")
+				}
 			}
 		}
 		if (callStack.isNotEmpty()) {

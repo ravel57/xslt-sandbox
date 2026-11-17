@@ -7,6 +7,7 @@ import javafx.geometry.Pos
 import javafx.scene.Scene
 import javafx.scene.control.*
 import javafx.scene.layout.HBox
+import javafx.scene.layout.Priority
 import javafx.scene.layout.Region
 import javafx.scene.layout.StackPane
 import javafx.scene.layout.VBox
@@ -16,6 +17,8 @@ import org.fxmisc.richtext.CodeArea
 import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid
 import org.kordamp.ikonli.javafx.FontIcon
 import ru.ravel.xsltsandbox.AppContext
+import ru.ravel.xsltsandbox.connector.ConnectorConfigStore
+import ru.ravel.xsltsandbox.connector.ConnectorSettingsDialog
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.inputDocuments
 import ru.ravel.xsltsandbox.log.AppLog
 import ru.ravel.xsltsandbox.debugger.ActivityDebugger
@@ -42,6 +45,7 @@ class ToolBarBuilder(
 	private val debugger: ActivityDebugger,
 ) {
 	private val state get() = ctx.editor
+	private val connectorConfigStore = ConnectorConfigStore()
 
 	/** Пункт «Select file» меню DataDocs: по нему же дата-доки можно загрузить без диалога (см. [selectDataDocsFile]). */
 	private var selectDataDocsFileItem: MenuItem? = null
@@ -262,6 +266,15 @@ class ToolBarBuilder(
 			items.addAll(manualItem, fileItem, SeparatorMenuItem(), exportDataDocs)
 		}
 
+		val runConnectorBtn = Button().apply {
+			graphic = FontIcon(FontAwesomeSolid.BOLT)
+			tooltip = Tooltip("Run DataSource through connector jar (реальный прогон вместо Mock.xml)")
+			isVisible = false
+			isManaged = false
+			setOnAction { debugger.runCurrentDataSourceViaConnector() }
+		}
+		debugger.onConnectorRunStateChanged = { running -> runConnectorBtn.isDisable = running }
+
 		val diagramSeparator = Separator(Orientation.VERTICAL)
 //		val diagramBtn = Button().apply {
 //			graphic = FontIcon(FontAwesomeSolid.SITEMAP)
@@ -269,11 +282,25 @@ class ToolBarBuilder(
 //			setOnAction { RouteFinder(ctx.stage, ctx.currentSession).openFlowDiagramWindow() }
 //		}
 
+		val toolbarSpacer = Region().apply { HBox.setHgrow(this, Priority.ALWAYS) }
+		val settingsBtn = Button().apply {
+			graphic = FontIcon(FontAwesomeSolid.COG)
+			tooltip = Tooltip("Настройки запуска коннекторов: путь к crif-runner.jar, classpath, классы")
+			setOnAction {
+				val updated = ConnectorSettingsDialog.show(ctx.stage, connectorConfigStore.load(), focusConnectorName = null)
+					?: return@setOnAction
+				connectorConfigStore.save(updated)
+			}
+		}
+
 		fun updateActivityButtons() {
 			val xsltLoaded = ctx.currentSession.xsltPath != null
 			val brLoaded = ctx.currentSession.brRoot != null || ctx.currentSession.brRootQuant != null
 			nextActivityBtn.isDisable = !(xsltLoaded || brLoaded)
 			runDebugBtn.isDisable = !debugger.isAutoRunning && (ctx.currentSession.dataDocs.isNullOrBlank() || !(xsltLoaded || brLoaded))
+			val isDataSource = debugger.isCurrentActivityDataSource()
+			runConnectorBtn.isVisible = isDataSource
+			runConnectorBtn.isManaged = isDataSource
 		}
 		ctx.refreshActivityButtons = { updateActivityButtons() }
 
@@ -304,8 +331,11 @@ class ToolBarBuilder(
 			nextActivityBtn,
 			runDebugBtn,
 			dataDocsActivityBtn,
+			runConnectorBtn,
 			diagramSeparator,
 //			diagramBtn,
+			toolbarSpacer,
+			settingsBtn,
 		).apply {
 			alignment = Pos.CENTER_LEFT
 			padding = Insets(10.0)

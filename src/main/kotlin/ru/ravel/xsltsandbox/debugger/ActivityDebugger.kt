@@ -19,17 +19,20 @@ import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.getDataDocsInOut
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.mergeMockWithDataDocs
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.replaceDataDocsInString
 import ru.ravel.xsltsandbox.datadocs.MockXmlEditor
+import ru.ravel.xsltsandbox.connector.ConnectorJarRunner
 import ru.ravel.xsltsandbox.editor.DataDocsViewer
 import ru.ravel.xsltsandbox.files.SessionFiles
 import ru.ravel.xsltsandbox.models.ActivityType
 import ru.ravel.xsltsandbox.models.DocSession
 import ru.ravel.xsltsandbox.models.TabState
 import ru.ravel.xsltsandbox.models.TransformMode
+import ru.ravel.xsltsandbox.models.datasource.DataSource
 import ru.ravel.xsltsandbox.models.layout.DiagramLayout
 import ru.ravel.xsltsandbox.models.procedure.ProcedureCall
 import ru.ravel.xsltsandbox.transform.Transformer
 import ru.ravel.xsltsandbox.ui.Dialogs.showStatus
 import ru.ravel.xsltsandbox.utils.LayoutUtil
+import ru.ravel.xsltsandbox.utils.XmlUtil
 import ru.ravel.xsltsandbox.log.AppLog
 
 /**
@@ -43,6 +46,7 @@ class ActivityDebugger(
 	private val mockEditor: MockXmlEditor,
 ) {
 	private val activitiesDebugProcedureStack = mutableMapOf<DocSession, Stack<Path>>()
+	private val connectorRunner = ConnectorJarRunner()
 
 
 	fun setInitialCallStack(session: DocSession, callSites: List<Path>) {
@@ -324,6 +328,120 @@ class ActivityDebugger(
 				docsOut = if (mode == TransformMode.XSLT) result else null,
 			),
 		)
+	}
+
+
+	/** true, если открытая сейчас активность — DataSource (есть ConnectorName, MappingInput/MappingOutput.xslt). */
+	fun isCurrentActivityDataSource(): Boolean {
+		val propertiesFile = ctx.currentSession.mappingPropertyFile?.toFile() ?: return false
+		return propertiesFile.isFile && LayoutUtil.getActivityType(propertiesFile) == ActivityType.DATA_SOURCE
+	}
+
+
+	/**
+	 * Для открытой сейчас DataSource-активности: прогоняет нужные входные датадоки через MappingInput.xslt
+	 * (ConnectorInput), выполняет реальный коннектор через crif-runner (вместо ручного Mock.xml) и грузит
+	 * его результат в MappingOutput.xslt — по той же логике, что и обычный мок-режим в [processNextActivity],
+	 * только вместо Mock.xml используется настоящий прогон .jar-файла коннектора.
+	 */
+	fun runCurrentDataSourceViaConnector() {
+		val session = ctx.currentSession
+		val propertiesPath = session.mappingPropertyFile
+		if (propertiesPath == null || !propertiesPath.exists()) {
+			showStatus(ctx.stage, "Нет открытой активности (Properties.xml не найден).")
+			return
+		}
+		if (LayoutUtil.getActivityType(propertiesPath.toFile()) != ActivityType.DATA_SOURCE) {
+			showStatus(ctx.stage, "Текущая активность — не DataSource.")
+			return
+		}
+		if (session.dataDocs.isNullOrBlank()) {
+			showStatus(ctx.stage, "DataDocs пустые — загрузите DataDocs (Activities debugger → Open DataDocs).")
+			return
+		}
+		val activityDir = propertiesPath.parent ?: return
+		val dataSource = ctx.xmlMapper.readValue(propertiesPath.toFile(), DataSource::class.java)
+		val connectorName = dataSource.connectorName
+		if (connectorName.isNullOrBlank()) {
+			showStatus(ctx.stage, "В Properties.xml не указан ConnectorName:\n$propertiesPath")
+			return
+		}
+		val mappingInputFile = activityDir.resolve("MappingInput.xslt")
+		if (!mappingInputFile.exists()) {
+			showStatus(ctx.stage, "MappingInput.xslt не найден:\n$mappingInputFile")
+			return
+		}
+		val mappingOutputFile = activityDir.resolve("MappingOutput.xslt")
+		if (!mappingOutputFile.exists()) {
+			showStatus(ctx.stage, "MappingOutput.xslt не найден:\n$mappingOutputFile")
+			return
+		}
+
+		// 1) входные документы активности → ConnectorInput, через MappingInput.xslt
+		val neededInput = inputDocuments(propertiesPath.toFile(), session.dataDocs!!)
+		session.mode = TransformMode.XSLT
+		session.xsltArea.replaceText(XmlUtil.readXmlSafe(mappingInputFile.toFile()))
+		session.xmlArea.replaceText(neededInput)
+		AppLog.info("DataSource $connectorName: ConnectorInput из ${neededInput.length} симв. входных документов через ${mappingInputFile.fileName}")
+		val connectorInputXml = try {
+			transformer.doTransform(ctx.stage)
+		} catch (e: Exception) {
+			AppLog.error("DataSource $connectorName: MappingInput.xslt упал", e)
+			return
+		}
+
+		// 2) реальный прогон коннектора .jar вместо Mock.xml — настройки (возможный диалог) на FX-потоке,
+		// сам запуск процесса — в фоне, чтобы не морозить интерфейс на время работы настоящего коннектора
+		val resolved = connectorRunner.resolveConnector(ctx.stage, connectorName) ?: return
+		onConnectorRunStateChanged(true)
+		Thread({
+			val result = connectorRunner.execute(connectorName, resolved, connectorInputXml)
+			Platform.runLater {
+				onConnectorRunStateChanged(false)
+				finishConnectorRun(session, propertiesPath, mappingOutputFile, connectorName, result)
+			}
+		}, "connector-jar-run").apply { isDaemon = true }.start()
+	}
+
+
+	/** Меняется на время реального прогона коннектора (дизейблить кнопку и т.п.), на FX-потоке. */
+	var onConnectorRunStateChanged: (Boolean) -> Unit = {}
+
+
+	/** Продолжение [runCurrentDataSourceViaConnector] после возврата из фонового потока — уже на FX-потоке. */
+	private fun finishConnectorRun(
+		session: DocSession,
+		propertiesPath: Path,
+		mappingOutputFile: Path,
+		connectorName: String,
+		result: ConnectorJarRunner.RunResult,
+	) {
+		if (!result.success) {
+			AppLog.error("DataSource $connectorName: прогон коннектора не удался — ${result.errorMessage}")
+			showStatus(ctx.stage, "Ошибка выполнения коннектора '$connectorName':\n${result.errorMessage}")
+			return
+		}
+		AppLog.info("DataSource $connectorName: коннектор отработал, ConnectorOutput ${result.connectorOutputXml?.length ?: 0} симв.")
+
+		// 3) ConnectorOutput + текущие датадоки → MappingOutput.xslt, так же, как при работе с Mock.xml
+		val wantedDocs = getDataDocsInOut(propertiesPath.toFile())
+			.filter { it.access in arrayOf("InOut", "Input", "Output") }
+			.map { it.referenceName }
+			.distinct()
+		val sourceDocsXml = session.xmlArea.text.takeIf { it.isNotBlank() } ?: (session.dataDocs ?: "")
+		val merged = mergeMockWithDataDocs(result.connectorOutputXml!!, sourceDocsXml, wantedDocs)
+
+		val state = TabState(
+			xmlPath = null,
+			xsltPath = mappingOutputFile.absolutePathString(),
+			brPath = null,
+			process = null,
+		)
+		files.loadTabStateIntoSession(session, state)
+		session.xmlArea.replaceText(merged)
+		session.xmlPath = null
+		session.updateTabTitle()
+		ctx.xsltRadio.isSelected = true
 	}
 
 
