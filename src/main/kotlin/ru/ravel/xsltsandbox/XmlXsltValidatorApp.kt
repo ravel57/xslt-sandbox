@@ -213,6 +213,20 @@ class XmlXsltValidatorApp : Application() {
 						AppLog.warn("файл свойств коннектора не найден: $path")
 					}
 				}
+				"--input-connector-prop" -> {
+					val kv = args.getOrNull(index + 1)?.takeUnless { it.startsWith("--") }
+					val eq = kv?.indexOf('=') ?: -1
+					if (kv != null && eq > 0) {
+						val key = kv.substring(0, eq)
+						val value = kv.substring(eq + 1)
+						val store = ConnectorConfigStore()
+						val config = store.load()
+						store.save(config.copy(connectorProps = config.connectorProps + (key to value)))
+						AppLog.info("свойство коннектора (connProp) из аргумента запуска: $key")
+					} else {
+						AppLog.warn("--input-connector-prop ожидает значение вида key=value, получено: $kv")
+					}
+				}
 			}
 		}
 		if (callStack.isNotEmpty()) {

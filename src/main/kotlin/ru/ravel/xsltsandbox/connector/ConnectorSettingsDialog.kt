@@ -7,6 +7,7 @@ import javafx.scene.control.Button
 import javafx.scene.control.Label
 import javafx.scene.control.TextArea
 import javafx.scene.control.TextField
+import javafx.scene.control.TextInputDialog
 import javafx.scene.control.Tooltip
 import javafx.scene.layout.HBox
 import javafx.scene.layout.Priority
@@ -127,6 +128,42 @@ object ConnectorSettingsDialog {
 				appendClasspathEntry(dir.absolutePath)
 			}
 		}
+		var rememberedModulesRoot: String? = null
+		val addModuleBtn = Button("Добавить JBoss-модуль по имени…").apply {
+			tooltip = Tooltip(
+				"Резолвит jar'ы JBoss-модуля прямо по имени (например org.apache.httpcomponents) через его " +
+					"module.xml, без обхода всего дерева modules — быстрее, когда эта папка на медленной сети"
+			)
+			setOnAction {
+				val modulesRoot = rememberedModulesRoot
+					?: DirectoryChooser().apply { title = "Выберите папку modules" }.showDialog(owner)?.absolutePath
+					?: return@setOnAction
+				rememberedModulesRoot = modulesRoot
+
+				val input = TextInputDialog().apply {
+					title = "JBoss-модуль"
+					headerText = "Имя модуля (и слот через двоеточие, по умолчанию main)"
+					contentText = "org.apache.httpcomponents или org.apache.httpcomponents:main"
+				}.showAndWait().orElse(null)?.trim()
+				if (input.isNullOrBlank()) return@setOnAction
+
+				val parts = input.split(":", limit = 2)
+				val moduleName = parts[0].trim()
+				val slot = parts.getOrNull(1)?.trim().orEmpty().ifBlank { "main" }
+
+				val resolved = JBossModuleResolver.resolve(modulesRoot, moduleName, slot)
+				if (resolved == null) {
+					val tried = JBossModuleResolver.candidatePaths(modulesRoot, moduleName, slot).joinToString("\n")
+					showStatus(owner, "module.xml для '$moduleName:$slot' не найден. Проверенные пути:\n$tried")
+					return@setOnAction
+				}
+				if (resolved.jarPaths.isEmpty()) {
+					showStatus(owner, "В ${resolved.moduleXmlPath} нет <resource-root> — добавлять нечего.")
+					return@setOnAction
+				}
+				resolved.jarPaths.forEach { appendClasspathEntry(it) }
+			}
+		}
 
 		val jndiArea = TextArea(current.jndiDataSources.joinToString("\n")).apply {
 			prefRowCount = 3
@@ -160,9 +197,11 @@ object ConnectorSettingsDialog {
 					"найденные jndi-name пустыми строками — заполнить можно кнопкой импорта standalone.xml выше"
 			)
 			setOnAction {
-				val classpathEntries = ConnectorJarRunner.resolveClasspathEntries(
-					jarPath,
-					classpathArea.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList(),
+				val classpathEntries = ConnectorJarRunner.expandDirectoriesCached(
+					ConnectorJarRunner.resolveClasspathEntries(
+						jarPath,
+						classpathArea.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList(),
+					)
 				)
 				val names = SpringJndiLookupScanner.scan(classpathEntries)
 				if (names.isEmpty()) {
@@ -202,7 +241,7 @@ object ConnectorSettingsDialog {
 			importStandaloneBtn,
 			Label("Classpath (jar-файлы и/или папки с коннектором — как у crif-runner's classpath.entries):"),
 			classpathArea,
-			HBox(8.0, addJarBtn, addFolderBtn),
+			HBox(8.0, addJarBtn, addFolderBtn, addModuleBtn),
 			Label("Заглушки JNDI DataSource (реальный java:/… JNDI вне сервера недоступен):"),
 			jndiArea,
 			HBox(8.0, findJndiNamesBtn, importDatasourcesBtn),

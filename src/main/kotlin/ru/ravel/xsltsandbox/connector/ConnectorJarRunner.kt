@@ -5,6 +5,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Properties
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javafx.stage.Stage
 import ru.ravel.xsltsandbox.log.AppLog
@@ -34,6 +35,31 @@ class ConnectorJarRunner(
 				val jarDir = File(it).parentFile?.absolutePath
 				listOfNotNull(jarDir, it) + classpathEntries
 			} ?: classpathEntries
+
+		/** Кэш «папка → найденные в ней *.jar» на время жизни sandbox'а, см. [expandDirectoriesCached]. */
+		private val directoryJarCache = ConcurrentHashMap<String, List<String>>()
+
+		/**
+		 * То же, что [entries], но каждая папка однократно за сессию sandbox разворачивается в плоский
+		 * список найденных в ней (рекурсивно) *.jar — crif-runner получает уже готовые файлы и не делает
+		 * тот же рекурсивный обход сам при каждом прогоне. Критично для медленных сетевых папок (целый
+		 * JBoss modules по UNC-пути) — там именно повторный обход на каждый запуск и съедал минуты.
+		 * Из-за кэша папку, если её содержимое поменялось на сервере, подхватит только новый запуск
+		 * sandbox'а. «Голые» classpath-ресурсы прямо в папке (не в jar) этим путём не подхватываются —
+		 * если они нужны, добавьте такую папку отдельной строкой без расчёта на этот кэш.
+		 */
+		fun expandDirectoriesCached(entries: List<String>): List<String> = entries.flatMap { entry ->
+			val file = File(entry)
+			if (!file.isDirectory) return@flatMap listOf(entry)
+			directoryJarCache.getOrPut(file.absolutePath) {
+				AppLog.info("Сканирую папку на jar-файлы (однократно за сессию sandbox): $entry")
+				val found = file.walkTopDown().filter { it.isFile && it.extension.equals("jar", ignoreCase = true) }
+					.map { it.absolutePath }
+					.toList()
+				AppLog.info("Найдено ${found.size} jar-файлов в $entry")
+				found
+			}
+		}
 	}
 
 
@@ -148,7 +174,7 @@ class ConnectorJarRunner(
 		resultFile: Path,
 		connPropsFile: Path?,
 	) {
-		val classpathEntries = resolveClasspathEntries(jarPath, config.classpathEntries)
+		val classpathEntries = expandDirectoriesCached(resolveClasspathEntries(jarPath, config.classpathEntries))
 
 		val props = Properties()
 		props.setProperty("connector.className", className)
