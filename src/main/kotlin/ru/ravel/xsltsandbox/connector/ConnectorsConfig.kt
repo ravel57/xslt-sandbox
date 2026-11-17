@@ -8,6 +8,9 @@ package ru.ravel.xsltsandbox.connector
  * @param javaExecutablePath путь к `java`/`java.exe`, которым запускать crif-runner.jar; пусто — берётся
  *   JVM, в которой работает сам sandbox (`java.home`)
  * @param classpathEntries jar-файлы и/или папки с классами проверяемых коннекторов (и Spring, если используется)
+ * @param vmOptions доп. опции JVM процесса crif-runner (`-Dxxx=yyy`, `-Xmx...` и т.п.), через пробел/перенос строки
+ * @param connectorProps свойства (`connProps`), передаваемые коннектору в execute(...); изначально могут
+ *   прийти из аргумента запуска `--input-connector-props-path`, затем редактируются и сохраняются здесь же
  *
  * Имя Java-класса коннектора сюда не входит — оно не настройка приложения, а параметр конкретного
  * прогона: передаётся аргументом запуска sandbox `--input-connector-class-name`.
@@ -20,4 +23,6 @@ data class ConnectorsConfig(
 	val runnerJarPath: String = "",
 	val javaExecutablePath: String = "",
 	val classpathEntries: List<String> = emptyList(),
+	val vmOptions: String = "",
+	val connectorProps: Map<String, String> = emptyMap(),
 )

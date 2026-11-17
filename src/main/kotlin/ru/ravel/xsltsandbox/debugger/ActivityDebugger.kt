@@ -395,7 +395,7 @@ class ActivityDebugger(
 		val resolved = connectorRunner.resolveConnector(ctx.stage, ctx.connectorClassName, ctx.connectorJarPath) ?: return
 		onConnectorRunStateChanged(true)
 		Thread({
-			val result = connectorRunner.execute(connectorName, resolved, connectorInputXml, ctx.connectorProps)
+			val result = connectorRunner.execute(connectorName, resolved, connectorInputXml)
 			Platform.runLater {
 				onConnectorRunStateChanged(false)
 				finishConnectorRun(session, propertiesPath, mappingOutputFile, connectorName, result)

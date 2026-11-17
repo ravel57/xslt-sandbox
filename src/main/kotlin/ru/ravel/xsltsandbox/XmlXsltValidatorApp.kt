@@ -8,6 +8,7 @@ import javafx.scene.input.KeyEvent
 import javafx.scene.layout.BorderPane
 import javafx.stage.Stage
 import ru.ravel.xsltsandbox.config.ConfigStore
+import ru.ravel.xsltsandbox.connector.ConnectorConfigStore
 import ru.ravel.xsltsandbox.datadocs.MockXmlEditor
 import ru.ravel.xsltsandbox.debug.DebugBridge
 import ru.ravel.xsltsandbox.debugger.ActivityDebugger
@@ -203,8 +204,11 @@ class XmlXsltValidatorApp : Application() {
 					val file = path.toFile()
 					if (file.isFile) {
 						val props = java.util.Properties().apply { file.inputStream().use { load(it) } }
-						ctx.connectorProps = LinkedHashMap(props.stringPropertyNames().associateWith { props.getProperty(it) })
-						AppLog.info("свойства коннектора (connProps) из аргумента запуска: $path (${ctx.connectorProps.size})")
+						val loaded = props.stringPropertyNames().associateWith { props.getProperty(it) }
+						val store = ConnectorConfigStore()
+						val config = store.load()
+						store.save(config.copy(connectorProps = config.connectorProps + loaded))
+						AppLog.info("свойства коннектора (connProps) из аргумента запуска: $path (${loaded.size}), сохранены")
 					} else {
 						AppLog.warn("файл свойств коннектора не найден: $path")
 					}

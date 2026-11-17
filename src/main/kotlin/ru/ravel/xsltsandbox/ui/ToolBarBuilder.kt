@@ -278,13 +278,12 @@ class ToolBarBuilder(
 
 		val connectorPropsBtn = Button().apply {
 			graphic = FontIcon(FontAwesomeSolid.LIST_ALT)
-			tooltip = Tooltip("Свойства коннектора (connProps), передаваемые в execute(...)")
-			isVisible = false
-			isManaged = false
+			tooltip = Tooltip("Свойства коннектора (connProps), передаваемые в execute(...) — сохраняются вместе с остальными настройками")
 			setOnAction {
-				val updated = ConnectorPropsDialog.show(ctx.stage, ctx.connectorProps)
+				val config = connectorConfigStore.load()
+				val updated = ConnectorPropsDialog.show(ctx.stage, LinkedHashMap(config.connectorProps))
 					?: return@setOnAction
-				ctx.connectorProps = updated
+				connectorConfigStore.save(config.copy(connectorProps = updated))
 			}
 		}
 
@@ -314,8 +313,6 @@ class ToolBarBuilder(
 			val isDataSource = debugger.isCurrentActivityDataSource()
 			runConnectorBtn.isVisible = isDataSource
 			runConnectorBtn.isManaged = isDataSource
-			connectorPropsBtn.isVisible = isDataSource
-			connectorPropsBtn.isManaged = isDataSource
 		}
 		ctx.refreshActivityButtons = { updateActivityButtons() }
 
@@ -350,6 +347,7 @@ class ToolBarBuilder(
 			diagramSeparator,
 //			diagramBtn,
 			toolbarSpacer,
+			connectorPropsBtn,
 			settingsBtn,
 		).apply {
 			alignment = Pos.CENTER_LEFT

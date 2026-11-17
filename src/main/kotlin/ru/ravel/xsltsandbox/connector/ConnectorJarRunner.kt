@@ -52,7 +52,7 @@ class ConnectorJarRunner(
 	 * через реальный класс коннектора [connectorName], разрешённый заранее через [resolveConnector].
 	 * Только I/O и запуск внешнего процесса — безопасно звать с фонового потока (не блокировать FX).
 	 */
-	fun execute(connectorName: String, resolved: ResolvedConnector, connectorInputXml: String, connectorProps: Map<String, String> = emptyMap()): RunResult {
+	fun execute(connectorName: String, resolved: ResolvedConnector, connectorInputXml: String): RunResult {
 		val className = resolved.className
 		val config = resolved.config
 
@@ -69,22 +69,24 @@ class ConnectorJarRunner(
 		}
 
 		Files.writeString(inputFile, connectorInputXml, Charsets.UTF_8)
-		if (connectorProps.isNotEmpty()) {
+		if (config.connectorProps.isNotEmpty()) {
 			val props = Properties()
-			connectorProps.forEach { (k, v) -> props.setProperty(k, v) }
+			config.connectorProps.forEach { (k, v) -> props.setProperty(k, v) }
 			Files.newOutputStream(connPropsFile).use { props.store(it, "xslt-sandbox: connProps коннектора") }
 		}
 		writeRunnerConfig(
 			configFile, connectorName, className, resolved.jarPath, config,
 			inputFile, outputFile, resultFile,
-			connPropsFile.takeIf { connectorProps.isNotEmpty() },
+			connPropsFile.takeIf { config.connectorProps.isNotEmpty() },
 		)
 
 		val javaBin = javaExecutable(config)
+		val vmOptions = config.vmOptions.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+		val command = listOf(javaBin) + vmOptions + listOf("-jar", runnerJar.absolutePath, configFile.toString())
 
-		AppLog.info("коннектор $connectorName ($className): запуск $javaBin -jar $runnerJar $configFile")
+		AppLog.info("коннектор $connectorName ($className): запуск ${command.joinToString(" ")}")
 		val process = try {
-			ProcessBuilder(javaBin, "-jar", runnerJar.absolutePath, configFile.toString())
+			ProcessBuilder(command)
 				.redirectErrorStream(true)
 				.start()
 		} catch (e: Exception) {

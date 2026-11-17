@@ -63,6 +63,10 @@ object ConnectorSettingsDialog {
 			}
 		}
 
+		val vmOptionsField = TextField(current.vmOptions).apply {
+			promptText = "Доп. опции JVM для crif-runner: -Dkey=value -Xmx512m …"
+		}
+
 		val classpathArea = TextArea(current.classpathEntries.joinToString("\n")).apply {
 			prefRowCount = 4
 			promptText = "Один jar-файл или папка с классами коннектора на строку"
@@ -88,10 +92,11 @@ object ConnectorSettingsDialog {
 		val okBtn = Button("Сохранить").apply {
 			isDefaultButton = true
 			setOnAction {
-				result = ConnectorsConfig(
+				result = current.copy(
 					runnerJarPath = runnerJarField.text.trim(),
 					javaExecutablePath = javaExecField.text.trim(),
 					classpathEntries = classpathArea.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList(),
+					vmOptions = vmOptionsField.text.trim(),
 				)
 				dlg.close()
 			}
@@ -107,6 +112,8 @@ object ConnectorSettingsDialog {
 			HBox(8.0, runnerJarField, chooseRunnerJarBtn).apply { HBox.setHgrow(runnerJarField, Priority.ALWAYS) },
 			Label("Путь к java.exe (jdk-home):"),
 			HBox(8.0, javaExecField, chooseJavaExecBtn).apply { HBox.setHgrow(javaExecField, Priority.ALWAYS) },
+			Label("VM options:"),
+			vmOptionsField,
 			Label("Classpath (jar-файлы и/или папки с коннектором — как у crif-runner's classpath.entries):"),
 			classpathArea,
 			HBox(8.0, addJarBtn, addFolderBtn),
@@ -116,7 +123,7 @@ object ConnectorSettingsDialog {
 			VBox.setVgrow(classpathArea, Priority.ALWAYS)
 		}
 
-		dlg.scene = Scene(root, 620.0, 440.0)
+		dlg.scene = Scene(root, 620.0, 480.0)
 		dlg.showAndWait()
 		return result
 	}
