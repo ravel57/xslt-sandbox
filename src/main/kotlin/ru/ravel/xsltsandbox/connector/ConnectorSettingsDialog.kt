@@ -7,7 +7,6 @@ import javafx.scene.control.Button
 import javafx.scene.control.Label
 import javafx.scene.control.TextArea
 import javafx.scene.control.TextField
-import javafx.scene.control.TextInputDialog
 import javafx.scene.control.Tooltip
 import javafx.scene.layout.HBox
 import javafx.scene.layout.Priority
@@ -153,33 +152,47 @@ object ConnectorSettingsDialog {
 				val modulesRoot = chooser.showDialog(owner)?.absolutePath ?: return@setOnAction
 				rememberedModulesRoot = modulesRoot
 
-				val input = TextInputDialog().apply {
-					title = "JBoss-модуль"
-					headerText = "Имя модуля (и слот через двоеточие, по умолчанию main)"
-					contentText = "org.apache.httpcomponents или org.apache.httpcomponents:main"
-				}.showAndWait().orElse(null)?.trim()
-				if (input.isNullOrBlank()) return@setOnAction
+				val inputLines = MultiLineInputDialog.show(
+					owner,
+					"JBoss-модули",
+					"Имена модулей, по одному на строку (и слот через двоеточие, по умолчанию main) — " +
+						"можно сразу весь список, собранный для этого приложения:",
+					"org.apache.httpcomponents\norg.hibernate\norg.dom4j:main",
+				) ?: return@setOnAction
+				if (inputLines.isEmpty()) return@setOnAction
 
-				val parts = input.split(":", limit = 2)
-				val moduleName = parts[0].trim()
-				val slot = parts.getOrNull(1)?.trim().orEmpty().ifBlank { "main" }
-
-				val tree = JBossModuleResolver.resolveTransitive(modulesRoot, moduleName, slot)
-				if (tree.resolvedModules.isEmpty()) {
-					val tried = JBossModuleResolver.candidatePaths(modulesRoot, moduleName, slot).joinToString("\n")
-					showStatus(owner, "module.xml для '$moduleName:$slot' не найден. Проверенные пути:\n$tried")
-					return@setOnAction
+				val existing = classpathArea.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
+				val allJars = mutableListOf<String>()
+				val allResolved = mutableListOf<String>()
+				val allMissing = mutableListOf<String>()
+				for (line in inputLines) {
+					val parts = line.split(":", limit = 2)
+					val moduleName = parts[0].trim()
+					val slot = parts.getOrNull(1)?.trim().orEmpty().ifBlank { "main" }
+					val tree = JBossModuleResolver.resolveTransitive(modulesRoot, moduleName, slot)
+					allJars.addAll(tree.jarPaths)
+					allResolved.addAll(tree.resolvedModules)
+					allMissing.addAll(tree.missingModules)
 				}
-				val existing = classpathArea.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
-				tree.jarPaths.filter { it !in existing }.forEach { appendClasspathEntry(it) }
+				allJars.distinct().filter { it !in existing }.forEach { appendClasspathEntry(it); existing.add(it) }
 
-				val summary = "Добавлено ${tree.jarPaths.size} jar из ${tree.resolvedModules.size} модулей (вместе с зависимостями): " +
-					tree.resolvedModules.joinToString(", ")
-				if (tree.missingModules.isEmpty()) {
+				val summary = "Добавлено ${allJars.distinct().size} jar из ${allResolved.distinct().size} модулей (вместе с зависимостями): " +
+					allResolved.distinct().joinToString(", ")
+				if (allMissing.isEmpty()) {
 					showStatus(owner, summary)
 				} else {
-					showStatus(owner, "$summary\n\nНе нашлись (возможно, другой slot или раскладка):\n" + tree.missingModules.joinToString("\n"))
+					showStatus(owner, "$summary\n\nНе нашлись (возможно, другой slot или раскладка):\n" + allMissing.distinct().joinToString("\n"))
 				}
+			}
+		}
+		val clearDirCacheBtn = Button("Сбросить кэш сканирования папок").apply {
+			tooltip = Tooltip(
+				"Папки в Classpath (и модули выше) сканируются один раз и запоминаются в AppData насовсем, " +
+					"чтобы не пересканировать медленную сеть каждый запуск — нажмите, если содержимое на сервере реально поменялось"
+			)
+			setOnAction {
+				val removed = ConnectorJarRunner.clearDirectoryJarCache()
+				showStatus(owner, "Кэш очищен, записей удалено: $removed. Следующий прогон пересканирует папки заново.")
 			}
 		}
 
@@ -259,7 +272,7 @@ object ConnectorSettingsDialog {
 			importStandaloneBtn,
 			Label("Classpath (jar-файлы и/или папки с коннектором — как у crif-runner's classpath.entries):"),
 			classpathArea,
-			HBox(8.0, addJarBtn, addFolderBtn, addModuleBtn),
+			HBox(8.0, addJarBtn, addFolderBtn, addModuleBtn, clearDirCacheBtn),
 			Label("Заглушки JNDI DataSource (реальный java:/… JNDI вне сервера недоступен):"),
 			jndiArea,
 			HBox(8.0, findJndiNamesBtn, importDatasourcesBtn),

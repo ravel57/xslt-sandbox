@@ -1,13 +1,16 @@
 package ru.ravel.xsltsandbox.connector
 
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.StandardOpenOption
 import java.util.Properties
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javafx.stage.Stage
+import ru.ravel.xsltsandbox.config.AppDirs
 import ru.ravel.xsltsandbox.log.AppLog
 import ru.ravel.xsltsandbox.ui.Dialogs.showStatus
 
@@ -36,29 +39,59 @@ class ConnectorJarRunner(
 				listOfNotNull(jarDir, it) + classpathEntries
 			} ?: classpathEntries
 
-		/** Кэш «папка → найденные в ней *.jar» на время жизни sandbox'а, см. [expandDirectoriesCached]. */
-		private val directoryJarCache = ConcurrentHashMap<String, List<String>>()
+		private val directoryJarCacheFile = AppDirs.configDir().resolve("classpath-dir-cache.json")
 
 		/**
-		 * То же, что [entries], но каждая папка однократно за сессию sandbox разворачивается в плоский
-		 * список найденных в ней (рекурсивно) *.jar — crif-runner получает уже готовые файлы и не делает
-		 * тот же рекурсивный обход сам при каждом прогоне. Критично для медленных сетевых папок (целый
-		 * JBoss modules по UNC-пути) — там именно повторный обход на каждый запуск и съедал минуты.
-		 * Из-за кэша папку, если её содержимое поменялось на сервере, подхватит только новый запуск
-		 * sandbox'а. «Голые» classpath-ресурсы прямо в папке (не в jar) этим путём не подхватываются —
-		 * если они нужны, добавьте такую папку отдельной строкой без расчёта на этот кэш.
+		 * Кэш «папка → найденные в ней *.jar», см. [expandDirectoriesCached]. Хранится не только в
+		 * памяти процесса, а в файле в AppData — переживает перезапуск sandbox'а: на медленной сетевой
+		 * папке (целый JBoss modules по UNC-пути) первый прогон после каждого перезапуска иначе был бы
+		 * таким же медленным, как самый первый вообще.
+		 */
+		private val directoryJarCache: ConcurrentHashMap<String, List<String>> = ConcurrentHashMap(
+			runCatching { jacksonObjectMapper().readValue<Map<String, List<String>>>(directoryJarCacheFile.toFile()) }.getOrDefault(emptyMap())
+		)
+
+		private fun saveDirectoryJarCache() {
+			runCatching {
+				Files.createDirectories(directoryJarCacheFile.parent)
+				Files.writeString(
+					directoryJarCacheFile,
+					jacksonObjectMapper().writerWithDefaultPrettyPrinter().writeValueAsString(directoryJarCache),
+					StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE,
+				)
+			}.onFailure { AppLog.warn("Не удалось сохранить $directoryJarCacheFile: ${it.message}") }
+		}
+
+		/**
+		 * То же, что [entries], но каждая папка разворачивается в плоский список найденных в ней
+		 * (рекурсивно) *.jar — crif-runner получает уже готовые файлы и не делает тот же рекурсивный
+		 * обход сам при каждом прогоне. Результат кэшируется на диске (см. [directoryJarCacheFile]),
+		 * так что повторный обход не нужен даже после перезапуска sandbox'а — только если папку
+		 * удалить из кэш-файла руками или она реально поменяется на сервере. «Голые» classpath-ресурсы
+		 * прямо в папке (не в jar) этим путём не подхватываются — добавьте такую папку отдельной строкой.
 		 */
 		fun expandDirectoriesCached(entries: List<String>): List<String> = entries.flatMap { entry ->
 			val file = File(entry)
 			if (!file.isDirectory) return@flatMap listOf(entry)
-			directoryJarCache.getOrPut(file.absolutePath) {
-				AppLog.info("Сканирую папку на jar-файлы (однократно за сессию sandbox): $entry")
-				val found = file.walkTopDown().filter { it.isFile && it.extension.equals("jar", ignoreCase = true) }
-					.map { it.absolutePath }
-					.toList()
-				AppLog.info("Найдено ${found.size} jar-файлов в $entry")
-				found
-			}
+			val key = file.absolutePath
+			directoryJarCache[key]?.let { return@flatMap it }
+
+			AppLog.info("Сканирую папку на jar-файлы (результат сохранится в AppData): $entry")
+			val found = file.walkTopDown().filter { it.isFile && it.extension.equals("jar", ignoreCase = true) }
+				.map { it.absolutePath }
+				.toList()
+			AppLog.info("Найдено ${found.size} jar-файлов в $entry")
+			directoryJarCache[key] = found
+			saveDirectoryJarCache()
+			found
+		}
+
+		/** Сбрасывает дисковый кэш полностью (см. [expandDirectoriesCached]). @return сколько записей было. */
+		fun clearDirectoryJarCache(): Int {
+			val size = directoryJarCache.size
+			directoryJarCache.clear()
+			saveDirectoryJarCache()
+			return size
 		}
 	}
 
