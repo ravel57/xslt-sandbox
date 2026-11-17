@@ -134,7 +134,14 @@ class ConnectorJarRunner(
 		resultFile: Path,
 		connPropsFile: Path?,
 	) {
-		val classpathEntries = jarPath?.let { listOf(it) + config.classpathEntries } ?: config.classpathEntries
+		// Папка проверяемого jar'а целиком, а не только сам jar: соседние коннекторы в той же папке
+		// деплоя (типично для CRIF — несколько коннекторов одного бандла) могут содержать общие базовые
+		// классы (как BaseConnector) и свой Spring-контекст, который тоже должен попасть в crif-runner's
+		// classpath*:META-INF/spring/*.xml — иначе их бины не поднимутся вместе с проверяемым коннектором.
+		val classpathEntries = jarPath?.let {
+			val jarDir = File(it).parentFile?.absolutePath
+			listOfNotNull(jarDir, it) + config.classpathEntries
+		} ?: config.classpathEntries
 
 		val props = Properties()
 		props.setProperty("connector.className", className)
