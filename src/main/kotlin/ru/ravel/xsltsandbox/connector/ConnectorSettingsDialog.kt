@@ -146,9 +146,11 @@ object ConnectorSettingsDialog {
 					"без ручного угадывания каждой следующей ошибки NoClassDefFound, и без обхода всего дерева modules"
 			)
 			setOnAction {
-				val modulesRoot = rememberedModulesRoot
-					?: DirectoryChooser().apply { title = "Выберите папку modules" }.showDialog(owner)?.absolutePath
-					?: return@setOnAction
+				val chooser = DirectoryChooser().apply {
+					title = "Выберите папку modules (корень, не подпапку конкретного модуля)"
+					rememberedModulesRoot?.let { File(it) }?.takeIf { it.isDirectory }?.let { initialDirectory = it }
+				}
+				val modulesRoot = chooser.showDialog(owner)?.absolutePath ?: return@setOnAction
 				rememberedModulesRoot = modulesRoot
 
 				val input = TextInputDialog().apply {
