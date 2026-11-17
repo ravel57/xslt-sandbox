@@ -38,9 +38,17 @@ object JBossStandaloneImport {
 		properties.flatMap { p -> ENV_TOKEN.findAll(p.rawValue).map { it.groupValues[1] } }.distinct()
 
 
-	/** Подставляет [envValues] (имя переменной → значение) в сырые значения свойств. */
+	/**
+	 * Подставляет [envValues] (имя переменной → значение) в сырые значения свойств. Пустое/отсутствующее
+	 * значение переменной оставляет `${env.NAME}` как есть — вызывающий код должен проверить
+	 * [isResolved] и не подставлять "битые" значения туда, где раньше могло быть правильное.
+	 */
 	fun resolve(properties: List<ParsedProperty>, envValues: Map<String, String>): List<Pair<String, String>> =
 		properties.map { p ->
-			p.name to ENV_TOKEN.replace(p.rawValue) { m -> envValues[m.groupValues[1]] ?: m.value }
+			p.name to ENV_TOKEN.replace(p.rawValue) { m -> envValues[m.groupValues[1]]?.takeIf { it.isNotBlank() } ?: m.value }
 		}
+
+
+	/** `false`, если в [value] остался хотя бы один неподставленный `${env.NAME}`. */
+	fun isResolved(value: String): Boolean = !ENV_TOKEN.containsMatchIn(value)
 }

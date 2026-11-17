@@ -18,8 +18,13 @@ import javafx.stage.Stage
  */
 object EnvVarsDialog {
 
-	/** @return имя → значение, или `null`, если пользователь отменил. */
-	fun show(owner: Stage, varNames: List<String>): Map<String, String>? {
+	/**
+	 * @param defaults ранее введённые значения (в рамках того же открытого диалога настроек) — чтобы
+	 *   повторный импорт не требовал вбивать те же пути заново (и, если забыть, не затирал ими же
+	 *   ранее корректно подставленные значения пустыми).
+	 * @return имя → значение, или `null`, если пользователь отменил.
+	 */
+	fun show(owner: Stage, varNames: List<String>, defaults: Map<String, String> = emptyMap()): Map<String, String>? {
 		var result: Map<String, String>? = null
 
 		val dlg = Stage().apply {
@@ -28,7 +33,7 @@ object EnvVarsDialog {
 			title = "Переменные окружения сервера"
 		}
 
-		val area = TextArea(varNames.joinToString("\n") { "$it=" }).apply {
+		val area = TextArea(varNames.joinToString("\n") { "$it=${defaults[it].orEmpty()}" }).apply {
 			prefRowCount = varNames.size.coerceIn(3, 12)
 			promptText = "имя_переменной=значение, по одной на строку"
 		}

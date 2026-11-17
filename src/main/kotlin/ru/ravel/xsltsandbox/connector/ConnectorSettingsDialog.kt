@@ -74,6 +74,7 @@ object ConnectorSettingsDialog {
 		val vmOptionsField = TextField(current.vmOptions).apply {
 			promptText = "Доп. опции JVM для crif-runner: -Dkey=value -Xmx512m …"
 		}
+		val rememberedEnvValues = mutableMapOf<String, String>()
 		val importStandaloneBtn = Button("Импорт из standalone.xml…").apply {
 			tooltip = Tooltip(
 				"Переносит <system-properties> из JBoss standalone.xml в VM options (-Dname=value) — " +
@@ -97,13 +98,22 @@ object ConnectorSettingsDialog {
 				val envFromOs = envVarNames.mapNotNull { name -> System.getenv(name)?.let { name to it } }.toMap()
 				val missing = envVarNames.filter { it !in envFromOs }
 				val envFromUser = if (missing.isNotEmpty()) {
-					EnvVarsDialog.show(owner, missing) ?: return@setOnAction
+					EnvVarsDialog.show(owner, missing, rememberedEnvValues) ?: return@setOnAction
 				} else {
 					emptyMap()
 				}
+				rememberedEnvValues.putAll(envFromUser)
 
 				val resolved = JBossStandaloneImport.resolve(properties, envFromOs + envFromUser)
-				vmOptionsField.text = mergeVmOptions(vmOptionsField.text, resolved)
+				val (ok, broken) = resolved.partition { (_, value) -> JBossStandaloneImport.isResolved(value) }
+				vmOptionsField.text = mergeVmOptions(vmOptionsField.text, ok)
+				if (broken.isNotEmpty()) {
+					showStatus(
+						owner,
+						"Не удалось подставить переменную окружения, пропущены (значения не менялись):\n" +
+							broken.joinToString("\n") { it.first },
+					)
+				}
 			}
 		}
 
@@ -131,8 +141,9 @@ object ConnectorSettingsDialog {
 		var rememberedModulesRoot: String? = null
 		val addModuleBtn = Button("Добавить JBoss-модуль по имени…").apply {
 			tooltip = Tooltip(
-				"Резолвит jar'ы JBoss-модуля прямо по имени (например org.apache.httpcomponents) через его " +
-					"module.xml, без обхода всего дерева modules — быстрее, когда эта папка на медленной сети"
+				"Резолвит jar'ы JBoss-модуля прямо по имени (например org.hibernate) через его module.xml, " +
+					"рекурсивно по <dependencies> — подтянет и его собственные зависимости (dom4j, antlr и т.п.) " +
+					"без ручного угадывания каждой следующей ошибки NoClassDefFound, и без обхода всего дерева modules"
 			)
 			setOnAction {
 				val modulesRoot = rememberedModulesRoot
@@ -151,17 +162,22 @@ object ConnectorSettingsDialog {
 				val moduleName = parts[0].trim()
 				val slot = parts.getOrNull(1)?.trim().orEmpty().ifBlank { "main" }
 
-				val resolved = JBossModuleResolver.resolve(modulesRoot, moduleName, slot)
-				if (resolved == null) {
+				val tree = JBossModuleResolver.resolveTransitive(modulesRoot, moduleName, slot)
+				if (tree.resolvedModules.isEmpty()) {
 					val tried = JBossModuleResolver.candidatePaths(modulesRoot, moduleName, slot).joinToString("\n")
 					showStatus(owner, "module.xml для '$moduleName:$slot' не найден. Проверенные пути:\n$tried")
 					return@setOnAction
 				}
-				if (resolved.jarPaths.isEmpty()) {
-					showStatus(owner, "В ${resolved.moduleXmlPath} нет <resource-root> — добавлять нечего.")
-					return@setOnAction
+				val existing = classpathArea.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+				tree.jarPaths.filter { it !in existing }.forEach { appendClasspathEntry(it) }
+
+				val summary = "Добавлено ${tree.jarPaths.size} jar из ${tree.resolvedModules.size} модулей (вместе с зависимостями): " +
+					tree.resolvedModules.joinToString(", ")
+				if (tree.missingModules.isEmpty()) {
+					showStatus(owner, summary)
+				} else {
+					showStatus(owner, "$summary\n\nНе нашлись (возможно, другой slot или раскладка):\n" + tree.missingModules.joinToString("\n"))
 				}
-				resolved.jarPaths.forEach { appendClasspathEntry(it) }
 			}
 		}
 
