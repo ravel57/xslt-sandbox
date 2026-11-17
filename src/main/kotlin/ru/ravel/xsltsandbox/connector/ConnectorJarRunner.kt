@@ -152,6 +152,9 @@ class ConnectorJarRunner(
 
 		val props = Properties()
 		props.setProperty("connector.className", className)
+		if (jarPath != null) {
+			props.setProperty("connector.jarPath", jarPath)
+		}
 		props.setProperty("classpath.entries", classpathEntries.joinToString("\n"))
 		// по соглашению CRIF имя Spring-бина совпадает с ConnectorName активности; crif-runner сам
 		// решает, нужен ли вообще Spring-контекст (ищет META-INF/spring/*.xml на classpath коннектора)
