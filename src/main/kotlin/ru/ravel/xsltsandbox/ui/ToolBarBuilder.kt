@@ -287,7 +287,7 @@ class ToolBarBuilder(
 			graphic = FontIcon(FontAwesomeSolid.COG)
 			tooltip = Tooltip("Настройки запуска коннекторов: путь к crif-runner.jar, classpath, классы")
 			setOnAction {
-				val updated = ConnectorSettingsDialog.show(ctx.stage, connectorConfigStore.load(), focusConnectorName = null)
+				val updated = ConnectorSettingsDialog.show(ctx.stage, connectorConfigStore.load())
 					?: return@setOnAction
 				connectorConfigStore.save(updated)
 			}

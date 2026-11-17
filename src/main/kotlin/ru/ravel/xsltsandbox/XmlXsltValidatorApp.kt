@@ -194,6 +194,13 @@ class XmlXsltValidatorApp : Application() {
 					store.save(store.load().copy(classpathEntries = listOf(path.toString())))
 					AppLog.info("classpath проверяемого коннектора (jar) из аргумента запуска: $path")
 				}
+				"--input-connector-class-name" -> {
+					val className = args.getOrNull(index + 1)?.takeUnless { it.startsWith("--") }
+					if (!className.isNullOrBlank()) {
+						ctx.connectorClassName = className
+						AppLog.info("имя класса коннектора из аргумента запуска: $className")
+					}
+				}
 			}
 		}
 		if (callStack.isNotEmpty()) {

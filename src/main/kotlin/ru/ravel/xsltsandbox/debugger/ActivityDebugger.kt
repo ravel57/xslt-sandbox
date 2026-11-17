@@ -392,7 +392,7 @@ class ActivityDebugger(
 
 		// 2) реальный прогон коннектора .jar вместо Mock.xml — настройки (возможный диалог) на FX-потоке,
 		// сам запуск процесса — в фоне, чтобы не морозить интерфейс на время работы настоящего коннектора
-		val resolved = connectorRunner.resolveConnector(ctx.stage, connectorName) ?: return
+		val resolved = connectorRunner.resolveConnector(ctx.stage, ctx.connectorClassName) ?: return
 		onConnectorRunStateChanged(true)
 		Thread({
 			val result = connectorRunner.execute(connectorName, resolved, connectorInputXml)

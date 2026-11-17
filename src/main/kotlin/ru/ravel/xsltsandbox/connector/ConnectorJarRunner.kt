@@ -22,22 +22,23 @@ class ConnectorJarRunner(
 
 
 	/**
-	 * Разрешает classpath/класс для [connectorName]; при необходимости открывает диалог настроек —
-	 * вызывать только из FX-потока. `null` — пользователь отменил или не заполнил имя класса.
+	 * Разрешает classpath/раннер для прогона; при необходимости открывает диалог настроек — вызывать
+	 * только из FX-потока. [className] — имя класса коннектора, задаётся аргументом запуска sandbox
+	 * `--input-connector-class-name`, настройками приложения не является. `null` — пользователь
+	 * отменил диалог или имя класса не задано.
 	 */
-	fun resolveConnector(owner: Stage, connectorName: String): ResolvedConnector? {
+	fun resolveConnector(owner: Stage, className: String?): ResolvedConnector? {
+		if (className.isNullOrBlank()) {
+			showStatus(owner, "Имя класса коннектора не задано — передайте его аргументом запуска sandbox --input-connector-class-name.")
+			return null
+		}
 		var config = configStore.load()
-		if (config.runnerJarPath.isBlank() || config.classpathEntries.isEmpty() || connectorName !in config.connectorClassNames) {
-			config = ConnectorSettingsDialog.show(owner, config, connectorName) ?: return null
+		if (config.runnerJarPath.isBlank() || config.classpathEntries.isEmpty()) {
+			config = ConnectorSettingsDialog.show(owner, config) ?: return null
 			configStore.save(config)
 		}
 		if (config.runnerJarPath.isBlank() || !Files.isRegularFile(Path.of(config.runnerJarPath))) {
 			showStatus(owner, "Путь к crif-runner.jar не задан или файл не найден:\n${config.runnerJarPath}")
-			return null
-		}
-		val className = config.connectorClassNames[connectorName]
-		if (className.isNullOrBlank()) {
-			showStatus(owner, "Для коннектора '$connectorName' не задано имя Java-класса.")
 			return null
 		}
 		return ResolvedConnector(className, config)
@@ -67,7 +68,7 @@ class ConnectorJarRunner(
 		Files.writeString(inputFile, connectorInputXml, Charsets.UTF_8)
 		writeRunnerConfig(configFile, connectorName, className, config, inputFile, outputFile, resultFile)
 
-		val javaBin = javaExecutable()
+		val javaBin = javaExecutable(config)
 
 		AppLog.info("коннектор $connectorName ($className): запуск $javaBin -jar $runnerJar $configFile")
 		val process = try {
@@ -132,7 +133,9 @@ class ConnectorJarRunner(
 	}
 
 
-	private fun javaExecutable(): String {
+	/** Настроенный путь к `java`/`java.exe`, если задан; иначе — JVM, в которой работает сам sandbox. */
+	private fun javaExecutable(config: ConnectorsConfig): String {
+		config.javaExecutablePath.trim().takeIf { it.isNotEmpty() }?.let { return it }
 		val isWindows = System.getProperty("os.name").lowercase().contains("win")
 		val bin = Path.of(System.getProperty("java.home"), "bin", if (isWindows) "java.exe" else "java")
 		return bin.toString()
