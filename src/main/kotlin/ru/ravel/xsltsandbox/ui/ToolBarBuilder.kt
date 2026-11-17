@@ -308,7 +308,7 @@ class ToolBarBuilder(
 		fun updateActivityButtons() {
 			val xsltLoaded = ctx.currentSession.xsltPath != null
 			val brLoaded = ctx.currentSession.brRoot != null || ctx.currentSession.brRootQuant != null
-			nextActivityBtn.isDisable = !(xsltLoaded || brLoaded)
+			nextActivityBtn.isDisable = ctx.currentSession.dataDocs.isNullOrBlank() || !(xsltLoaded || brLoaded)
 			runDebugBtn.isDisable = !debugger.isAutoRunning && (ctx.currentSession.dataDocs.isNullOrBlank() || !(xsltLoaded || brLoaded))
 			val isDataSource = debugger.isCurrentActivityDataSource()
 			runConnectorBtn.isVisible = isDataSource

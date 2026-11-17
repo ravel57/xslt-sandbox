@@ -85,14 +85,6 @@ class ConnectorJarRunner(
 			saveDirectoryJarCache()
 			found
 		}
-
-		/** Сбрасывает дисковый кэш полностью (см. [expandDirectoriesCached]). @return сколько записей было. */
-		fun clearDirectoryJarCache(): Int {
-			val size = directoryJarCache.size
-			directoryJarCache.clear()
-			saveDirectoryJarCache()
-			return size
-		}
 	}
 
 

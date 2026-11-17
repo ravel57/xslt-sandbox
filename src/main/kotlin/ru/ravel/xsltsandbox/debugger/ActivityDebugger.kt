@@ -355,10 +355,6 @@ class ActivityDebugger(
 			showStatus(ctx.stage, "Текущая активность — не DataSource.")
 			return
 		}
-		if (session.dataDocs.isNullOrBlank()) {
-			showStatus(ctx.stage, "DataDocs пустые — загрузите DataDocs (Activities debugger → Open DataDocs).")
-			return
-		}
 		val activityDir = propertiesPath.parent ?: return
 		val dataSource = ctx.xmlMapper.readValue(propertiesPath.toFile(), DataSource::class.java)
 		val connectorName = dataSource.connectorName
@@ -377,8 +373,12 @@ class ActivityDebugger(
 			return
 		}
 
-		// 1) входные документы активности → ConnectorInput, через MappingInput.xslt
-		val neededInput = inputDocuments(propertiesPath.toFile(), session.dataDocs!!)
+		// 1) входные документы активности → ConnectorInput, через MappingInput.xslt — если полный набор
+		// DataDocs не загружен (например, нужный XML уже передан напрямую через --input-data-path),
+		// берём то, что уже лежит в xmlArea, как есть, вместо того чтобы требовать Open DataDocs
+		val neededInput = session.dataDocs?.takeIf { it.isNotBlank() }
+			?.let { inputDocuments(propertiesPath.toFile(), it) }
+			?: session.xmlArea.text
 		session.mode = TransformMode.XSLT
 		session.xsltArea.replaceText(XmlUtil.readXmlSafe(mappingInputFile.toFile()))
 		session.xmlArea.replaceText(neededInput)
