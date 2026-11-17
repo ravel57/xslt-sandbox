@@ -18,9 +18,10 @@ import java.io.File
 
 /**
  * Настройки реального прогона коннекторов через crif-runner: путь к самому crif-runner.jar
- * (дебагеру), к `java`, которым его запускать, classpath проверяемого коннектора и Spring context.
- * Имя Java-класса коннектора сюда не входит — это параметр конкретного прогона, задаётся
- * аргументом запуска sandbox `--input-connector-class-name`.
+ * (дебагеру), к `java`, которым его запускать, и classpath проверяемого коннектора. Имя Java-класса
+ * коннектора сюда не входит — это параметр конкретного прогона, задаётся аргументом запуска sandbox
+ * `--input-connector-class-name`. Spring context тоже не входит: crif-runner сам находит XML-файлы
+ * бинов в META-INF/spring внутри jar/classpath коннектора.
  */
 object ConnectorSettingsDialog {
 
@@ -84,18 +85,6 @@ object ConnectorSettingsDialog {
 			}
 		}
 
-		val springArea = TextArea(current.springContextFiles.joinToString("\n")).apply {
-			prefRowCount = 2
-			promptText = "Необязательно: Spring XML context-файлы, по одному на строку"
-		}
-		val addSpringBtn = Button("Добавить Spring context…").apply {
-			setOnAction {
-				val file = FileChoosers.create("Выберите Spring context", null, "XML Files (*.xml)", "*.xml")
-					.showOpenDialog(owner) ?: return@setOnAction
-				springArea.appendText((if (springArea.text.isBlank()) "" else "\n") + file.absolutePath)
-			}
-		}
-
 		val okBtn = Button("Сохранить").apply {
 			isDefaultButton = true
 			setOnAction {
@@ -103,7 +92,6 @@ object ConnectorSettingsDialog {
 					runnerJarPath = runnerJarField.text.trim(),
 					javaExecutablePath = javaExecField.text.trim(),
 					classpathEntries = classpathArea.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList(),
-					springContextFiles = springArea.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList(),
 				)
 				dlg.close()
 			}
@@ -122,16 +110,13 @@ object ConnectorSettingsDialog {
 			Label("Classpath (jar-файлы и/или папки с коннектором — как у crif-runner's classpath.entries):"),
 			classpathArea,
 			HBox(8.0, addJarBtn, addFolderBtn),
-			Label("Spring context (необязательно; имя Spring-бина берётся из ConnectorName активности):"),
-			springArea,
-			addSpringBtn,
 			HBox(8.0, okBtn, cancelBtn).apply { alignment = Pos.CENTER_RIGHT },
 		).apply {
 			padding = Insets(12.0)
 			VBox.setVgrow(classpathArea, Priority.ALWAYS)
 		}
 
-		dlg.scene = Scene(root, 620.0, 540.0)
+		dlg.scene = Scene(root, 620.0, 440.0)
 		dlg.showAndWait()
 		return result
 	}

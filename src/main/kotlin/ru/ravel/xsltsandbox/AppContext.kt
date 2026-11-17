@@ -51,6 +51,22 @@ class AppContext {
 	var connectorClassName: String? = null
 
 	/**
+	 * Путь к jar-файлу проверяемого коннектора (сам коннектор, не его зависимости). Не настройка
+	 * приложения и не часть `ConnectorsConfig.classpathEntries` — параметр конкретного прогона,
+	 * задаётся аргументом запуска `--input-connector-jar-path`, добавляется к classpath только
+	 * на время запуска (см. [ru.ravel.xsltsandbox.connector.ConnectorJarRunner]).
+	 */
+	var connectorJarPath: String? = null
+
+	/**
+	 * Свойства (`connProps`), передаваемые реальному коннектору через crif-runner. Изначально
+	 * загружаются из файла, заданного аргументом запуска `--input-connector-props-path`, затем
+	 * редактируются прямо в sandbox (кнопка рядом с запуском коннектора) — не настройка приложения,
+	 * а параметр конкретного прогона, живёт только в памяти.
+	 */
+	var connectorProps: LinkedHashMap<String, String> = LinkedHashMap()
+
+	/**
 	 * Пересчитывает доступность кнопок отладки (next activity, run debug). Нужен коду, который
 	 * открывает активность не кликом по переключателю режима — например, аргументам запуска:
 	 * сами переключатели в этом случае не меняются и кнопки не обновляются.

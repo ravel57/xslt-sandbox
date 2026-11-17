@@ -8,7 +8,6 @@ import javafx.scene.input.KeyEvent
 import javafx.scene.layout.BorderPane
 import javafx.stage.Stage
 import ru.ravel.xsltsandbox.config.ConfigStore
-import ru.ravel.xsltsandbox.connector.ConnectorConfigStore
 import ru.ravel.xsltsandbox.datadocs.MockXmlEditor
 import ru.ravel.xsltsandbox.debug.DebugBridge
 import ru.ravel.xsltsandbox.debugger.ActivityDebugger
@@ -190,15 +189,24 @@ class XmlXsltValidatorApp : Application() {
 				"--call-stack-item" -> callStack.add(path)
 				"--input-full-datadocs-path" -> fullDataDocs = path.toFile()
 				"--input-connector-jar-path" -> {
-					val store = ConnectorConfigStore()
-					store.save(store.load().copy(classpathEntries = listOf(path.toString())))
-					AppLog.info("classpath проверяемого коннектора (jar) из аргумента запуска: $path")
+					ctx.connectorJarPath = path.toString()
+					AppLog.info("jar проверяемого коннектора из аргумента запуска: ${ctx.connectorJarPath}")
 				}
 				"--input-connector-class-name" -> {
 					val className = args.getOrNull(index + 1)?.takeUnless { it.startsWith("--") }
 					if (!className.isNullOrBlank()) {
 						ctx.connectorClassName = className
 						AppLog.info("имя класса коннектора из аргумента запуска: $className")
+					}
+				}
+				"--input-connector-props-path" -> {
+					val file = path.toFile()
+					if (file.isFile) {
+						val props = java.util.Properties().apply { file.inputStream().use { load(it) } }
+						ctx.connectorProps = LinkedHashMap(props.stringPropertyNames().associateWith { props.getProperty(it) })
+						AppLog.info("свойства коннектора (connProps) из аргумента запуска: $path (${ctx.connectorProps.size})")
+					} else {
+						AppLog.warn("файл свойств коннектора не найден: $path")
 					}
 				}
 			}

@@ -18,22 +18,24 @@ class ConnectorJarRunner(
 	private val configStore: ConnectorConfigStore = ConnectorConfigStore(),
 ) {
 	data class RunResult(val success: Boolean, val connectorOutputXml: String? = null, val errorMessage: String? = null)
-	data class ResolvedConnector(val className: String, val config: ConnectorsConfig)
+
+	/** [jarPath] — jar проверяемого коннектора (`--input-connector-jar-path`), отдельно от [config]'овского classpath зависимостей. */
+	data class ResolvedConnector(val className: String, val config: ConnectorsConfig, val jarPath: String?)
 
 
 	/**
 	 * Разрешает classpath/раннер для прогона; при необходимости открывает диалог настроек — вызывать
-	 * только из FX-потока. [className] — имя класса коннектора, задаётся аргументом запуска sandbox
-	 * `--input-connector-class-name`, настройками приложения не является. `null` — пользователь
-	 * отменил диалог или имя класса не задано.
+	 * только из FX-потока. [className] — имя класса коннектора, [jarPath] — путь к его jar-файлу,
+	 * оба задаются аргументами запуска sandbox (`--input-connector-class-name`, `--input-connector-jar-path`)
+	 * и настройками приложения не являются. `null` — пользователь отменил диалог или имя класса не задано.
 	 */
-	fun resolveConnector(owner: Stage, className: String?): ResolvedConnector? {
+	fun resolveConnector(owner: Stage, className: String?, jarPath: String?): ResolvedConnector? {
 		if (className.isNullOrBlank()) {
 			showStatus(owner, "Имя класса коннектора не задано — передайте его аргументом запуска sandbox --input-connector-class-name.")
 			return null
 		}
 		var config = configStore.load()
-		if (config.runnerJarPath.isBlank() || config.classpathEntries.isEmpty()) {
+		if (config.runnerJarPath.isBlank() || (config.classpathEntries.isEmpty() && jarPath.isNullOrBlank())) {
 			config = ConnectorSettingsDialog.show(owner, config) ?: return null
 			configStore.save(config)
 		}
@@ -41,7 +43,7 @@ class ConnectorJarRunner(
 			showStatus(owner, "Путь к crif-runner.jar не задан или файл не найден:\n${config.runnerJarPath}")
 			return null
 		}
-		return ResolvedConnector(className, config)
+		return ResolvedConnector(className, config, jarPath)
 	}
 
 
@@ -50,7 +52,7 @@ class ConnectorJarRunner(
 	 * через реальный класс коннектора [connectorName], разрешённый заранее через [resolveConnector].
 	 * Только I/O и запуск внешнего процесса — безопасно звать с фонового потока (не блокировать FX).
 	 */
-	fun execute(connectorName: String, resolved: ResolvedConnector, connectorInputXml: String): RunResult {
+	fun execute(connectorName: String, resolved: ResolvedConnector, connectorInputXml: String, connectorProps: Map<String, String> = emptyMap()): RunResult {
 		val className = resolved.className
 		val config = resolved.config
 
@@ -59,6 +61,7 @@ class ConnectorJarRunner(
 		val outputFile = workDir.resolve("output.xml")
 		val resultFile = workDir.resolve("result.json")
 		val configFile = workDir.resolve("runner-config.properties")
+		val connPropsFile = workDir.resolve("conn-props.properties")
 
 		val runnerJar = File(config.runnerJarPath)
 		if (!runnerJar.isFile) {
@@ -66,7 +69,16 @@ class ConnectorJarRunner(
 		}
 
 		Files.writeString(inputFile, connectorInputXml, Charsets.UTF_8)
-		writeRunnerConfig(configFile, connectorName, className, config, inputFile, outputFile, resultFile)
+		if (connectorProps.isNotEmpty()) {
+			val props = Properties()
+			connectorProps.forEach { (k, v) -> props.setProperty(k, v) }
+			Files.newOutputStream(connPropsFile).use { props.store(it, "xslt-sandbox: connProps коннектора") }
+		}
+		writeRunnerConfig(
+			configFile, connectorName, className, resolved.jarPath, config,
+			inputFile, outputFile, resultFile,
+			connPropsFile.takeIf { connectorProps.isNotEmpty() },
+		)
 
 		val javaBin = javaExecutable(config)
 
@@ -113,18 +125,23 @@ class ConnectorJarRunner(
 		configFile: Path,
 		connectorName: String,
 		className: String,
+		jarPath: String?,
 		config: ConnectorsConfig,
 		inputFile: Path,
 		outputFile: Path,
 		resultFile: Path,
+		connPropsFile: Path?,
 	) {
+		val classpathEntries = jarPath?.let { listOf(it) + config.classpathEntries } ?: config.classpathEntries
+
 		val props = Properties()
 		props.setProperty("connector.className", className)
-		props.setProperty("classpath.entries", config.classpathEntries.joinToString("\n"))
-		if (config.springContextFiles.isNotEmpty()) {
-			props.setProperty("spring.contextFiles", config.springContextFiles.joinToString(", "))
-			// по соглашению CRIF имя Spring-бина совпадает с ConnectorName активности
-			props.setProperty("spring.beanName", connectorName)
+		props.setProperty("classpath.entries", classpathEntries.joinToString("\n"))
+		// по соглашению CRIF имя Spring-бина совпадает с ConnectorName активности; crif-runner сам
+		// решает, нужен ли вообще Spring-контекст (ищет META-INF/spring/*.xml на classpath коннектора)
+		props.setProperty("spring.beanName", connectorName)
+		if (connPropsFile != null) {
+			props.setProperty("connProps.file", connPropsFile.toString())
 		}
 		props.setProperty("input.xml.file", inputFile.toString())
 		props.setProperty("output.xml.file", outputFile.toString())

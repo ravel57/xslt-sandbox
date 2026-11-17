@@ -18,6 +18,7 @@ import org.kordamp.ikonli.fontawesome5.FontAwesomeSolid
 import org.kordamp.ikonli.javafx.FontIcon
 import ru.ravel.xsltsandbox.AppContext
 import ru.ravel.xsltsandbox.connector.ConnectorConfigStore
+import ru.ravel.xsltsandbox.connector.ConnectorPropsDialog
 import ru.ravel.xsltsandbox.connector.ConnectorSettingsDialog
 import ru.ravel.xsltsandbox.datadocs.DataDocsProcessor.inputDocuments
 import ru.ravel.xsltsandbox.log.AppLog
@@ -275,6 +276,18 @@ class ToolBarBuilder(
 		}
 		debugger.onConnectorRunStateChanged = { running -> runConnectorBtn.isDisable = running }
 
+		val connectorPropsBtn = Button().apply {
+			graphic = FontIcon(FontAwesomeSolid.LIST_ALT)
+			tooltip = Tooltip("Свойства коннектора (connProps), передаваемые в execute(...)")
+			isVisible = false
+			isManaged = false
+			setOnAction {
+				val updated = ConnectorPropsDialog.show(ctx.stage, ctx.connectorProps)
+					?: return@setOnAction
+				ctx.connectorProps = updated
+			}
+		}
+
 		val diagramSeparator = Separator(Orientation.VERTICAL)
 //		val diagramBtn = Button().apply {
 //			graphic = FontIcon(FontAwesomeSolid.SITEMAP)
@@ -301,6 +314,8 @@ class ToolBarBuilder(
 			val isDataSource = debugger.isCurrentActivityDataSource()
 			runConnectorBtn.isVisible = isDataSource
 			runConnectorBtn.isManaged = isDataSource
+			connectorPropsBtn.isVisible = isDataSource
+			connectorPropsBtn.isManaged = isDataSource
 		}
 		ctx.refreshActivityButtons = { updateActivityButtons() }
 
