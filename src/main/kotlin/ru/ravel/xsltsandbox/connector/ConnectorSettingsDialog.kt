@@ -195,6 +195,51 @@ object ConnectorSettingsDialog {
 				showStatus(owner, "Кэш очищен, записей удалено: $removed. Следующий прогон пересканирует папки заново.")
 			}
 		}
+		val findClassBtn = Button("Найти класс в папке…").apply {
+			tooltip = Tooltip(
+				"Для конечного пользователя: вставьте имя класса (или просто текст ошибки) прямо из " +
+					"NoClassDefFoundError/ClassNotFoundException — без угадывания имени JBoss-модуля. " +
+					"Папка сканируется один раз (и кэшируется, см. кнопку сброса кэша выше), дальше поиск мгновенный"
+			)
+			setOnAction {
+				val chooser = DirectoryChooser().apply {
+					title = "Выберите папку для поиска (например modules)"
+					rememberedModulesRoot?.let { File(it) }?.takeIf { it.isDirectory }?.let { initialDirectory = it }
+				}
+				val searchRoot = chooser.showDialog(owner)?.absolutePath ?: return@setOnAction
+				rememberedModulesRoot = searchRoot
+
+				val inputLines = MultiLineInputDialog.show(
+					owner,
+					"Поиск класса",
+					"Вставьте имя класса или текст ошибки (NoClassDefFoundError/ClassNotFoundException), " +
+						"можно несколько строк сразу:",
+					"org.dom4j.DocumentException",
+				) ?: return@setOnAction
+				val classNames = inputLines.mapNotNull { JarClassSearch.extractClassName(it) }.distinct()
+				if (classNames.isEmpty()) return@setOnAction
+
+				val jarsInRoot = ConnectorJarRunner.expandDirectoriesCached(listOf(searchRoot))
+				val existing = classpathArea.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toMutableSet()
+				val found = mutableListOf<String>()
+				val notFound = mutableListOf<String>()
+				for (className in classNames) {
+					val jars = JarClassSearch.findClassJars(jarsInRoot, className)
+					if (jars.isEmpty()) {
+						notFound.add(className)
+					} else {
+						jars.forEach { if (it !in existing) { appendClasspathEntry(it); existing.add(it); found.add(it) } }
+					}
+				}
+
+				val summary = if (found.isNotEmpty()) "Добавлено в Classpath:\n" + found.joinToString("\n") else "Ничего нового не добавлено."
+				if (notFound.isEmpty()) {
+					showStatus(owner, summary)
+				} else {
+					showStatus(owner, "$summary\n\nНе нашлись в $searchRoot:\n" + notFound.joinToString("\n"))
+				}
+			}
+		}
 
 		val jndiArea = TextArea(current.jndiDataSources.joinToString("\n")).apply {
 			prefRowCount = 3
@@ -272,7 +317,7 @@ object ConnectorSettingsDialog {
 			importStandaloneBtn,
 			Label("Classpath (jar-файлы и/или папки с коннектором — как у crif-runner's classpath.entries):"),
 			classpathArea,
-			HBox(8.0, addJarBtn, addFolderBtn, addModuleBtn, clearDirCacheBtn),
+			HBox(8.0, addJarBtn, addFolderBtn, addModuleBtn, findClassBtn, clearDirCacheBtn),
 			Label("Заглушки JNDI DataSource (реальный java:/… JNDI вне сервера недоступен):"),
 			jndiArea,
 			HBox(8.0, findJndiNamesBtn, importDatasourcesBtn),
