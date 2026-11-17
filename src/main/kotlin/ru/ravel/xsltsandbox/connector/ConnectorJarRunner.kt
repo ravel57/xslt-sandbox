@@ -23,6 +23,20 @@ class ConnectorJarRunner(
 	data class ResolvedConnector(val className: String, val config: ConnectorsConfig, val jarPath: String?)
 
 
+	companion object {
+		/**
+		 * Тот же classpath, что увидит crif-runner: папка проверяемого jar'а целиком (соседние
+		 * коннекторы того же бандла деплоя) плюс настроенные зависимости. Используется и при запуске,
+		 * и при поиске `jndi-name`/Spring context на этом же classpath ([SpringJndiLookupScanner]).
+		 */
+		fun resolveClasspathEntries(jarPath: String?, classpathEntries: List<String>): List<String> =
+			jarPath?.let {
+				val jarDir = File(it).parentFile?.absolutePath
+				listOfNotNull(jarDir, it) + classpathEntries
+			} ?: classpathEntries
+	}
+
+
 	/**
 	 * Разрешает classpath/раннер для прогона; при необходимости открывает диалог настроек — вызывать
 	 * только из FX-потока. [className] — имя класса коннектора, [jarPath] — путь к его jar-файлу,
@@ -36,7 +50,7 @@ class ConnectorJarRunner(
 		}
 		var config = configStore.load()
 		if (config.runnerJarPath.isBlank() || (config.classpathEntries.isEmpty() && jarPath.isNullOrBlank())) {
-			config = ConnectorSettingsDialog.show(owner, config) ?: return null
+			config = ConnectorSettingsDialog.show(owner, config, jarPath) ?: return null
 			configStore.save(config)
 		}
 		if (config.runnerJarPath.isBlank() || !Files.isRegularFile(Path.of(config.runnerJarPath))) {
@@ -134,14 +148,7 @@ class ConnectorJarRunner(
 		resultFile: Path,
 		connPropsFile: Path?,
 	) {
-		// Папка проверяемого jar'а целиком, а не только сам jar: соседние коннекторы в той же папке
-		// деплоя (типично для CRIF — несколько коннекторов одного бандла) могут содержать общие базовые
-		// классы (как BaseConnector) и свой Spring-контекст, который тоже должен попасть в crif-runner's
-		// classpath*:META-INF/spring/*.xml — иначе их бины не поднимутся вместе с проверяемым коннектором.
-		val classpathEntries = jarPath?.let {
-			val jarDir = File(it).parentFile?.absolutePath
-			listOfNotNull(jarDir, it) + config.classpathEntries
-		} ?: config.classpathEntries
+		val classpathEntries = resolveClasspathEntries(jarPath, config.classpathEntries)
 
 		val props = Properties()
 		props.setProperty("connector.className", className)
@@ -149,6 +156,9 @@ class ConnectorJarRunner(
 		// по соглашению CRIF имя Spring-бина совпадает с ConnectorName активности; crif-runner сам
 		// решает, нужен ли вообще Spring-контекст (ищет META-INF/spring/*.xml на classpath коннектора)
 		props.setProperty("spring.beanName", connectorName)
+		if (config.jndiDataSources.isNotEmpty()) {
+			props.setProperty("jndi.dataSources", config.jndiDataSources.joinToString("\n"))
+		}
 		if (connPropsFile != null) {
 			props.setProperty("connProps.file", connPropsFile.toString())
 		}

@@ -27,8 +27,13 @@ import java.io.File
  */
 object ConnectorSettingsDialog {
 
-	/** @return новую конфигурацию, или `null`, если пользователь отменил. */
-	fun show(owner: Stage, current: ConnectorsConfig): ConnectorsConfig? {
+	/**
+	 * @param jarPath jar проверяемого коннектора (`AppContext.connectorJarPath`), если уже известен —
+	 *   нужен только для кнопки поиска `jndi-name` в его собственном Spring-контексте; без него кнопка
+	 *   ищет только по настроенному здесь Classpath.
+	 * @return новую конфигурацию, или `null`, если пользователь отменил.
+	 */
+	fun show(owner: Stage, current: ConnectorsConfig, jarPath: String? = null): ConnectorsConfig? {
 		var result: ConnectorsConfig? = null
 
 		val dlg = Stage().apply {
@@ -123,6 +128,51 @@ object ConnectorSettingsDialog {
 			}
 		}
 
+		val jndiArea = TextArea(current.jndiDataSources.joinToString("\n")).apply {
+			prefRowCount = 3
+			promptText = "jndiName=driverClassName,jdbcUrl,username,password — по одной на строку"
+		}
+		val importDatasourcesBtn = Button("Импорт из standalone.xml…").apply {
+			tooltip = Tooltip(
+				"Берёт driver/URL/логин/пароль из <datasources> того же standalone.xml по jndi-name — " +
+					"дописывает недостающие поля руками не придётся, только пароли под Vault (${'$'}{VAULT::...}) надо будет подставить самим"
+			)
+			setOnAction {
+				val file = FileChoosers.create("Выберите standalone.xml", null, "XML Files (*.xml)", "*.xml")
+					.showOpenDialog(owner) ?: return@setOnAction
+				val dataSources = try {
+					JBossDatasourceImport.readDataSources(file)
+				} catch (e: Exception) {
+					showStatus(owner, "Не удалось разобрать файл:\n${e.message}")
+					return@setOnAction
+				}
+				if (dataSources.isEmpty()) {
+					showStatus(owner, "В файле не найден раздел <datasources> с jndi-name — ничего импортировать.")
+					return@setOnAction
+				}
+				jndiArea.text = mergeJndiLines(jndiArea.text, dataSources.map { it.jndiName to JBossDatasourceImport.toConfigLine(it) })
+			}
+		}
+		val findJndiNamesBtn = Button("Найти jndi-name в Spring-контексте коннектора…").apply {
+			tooltip = Tooltip(
+				"Сканирует META-INF/spring/*.xml на том же classpath, который увидит crif-runner " +
+					"(jar коннектора + соседние коннекторы его папки + Classpath ниже), и добавляет " +
+					"найденные jndi-name пустыми строками — заполнить можно кнопкой импорта standalone.xml выше"
+			)
+			setOnAction {
+				val classpathEntries = ConnectorJarRunner.resolveClasspathEntries(
+					jarPath,
+					classpathArea.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList(),
+				)
+				val names = SpringJndiLookupScanner.scan(classpathEntries)
+				if (names.isEmpty()) {
+					showStatus(owner, "В Spring-контексте на classpath не найдено ссылок jndi-name.")
+					return@setOnAction
+				}
+				jndiArea.text = addMissingJndiNames(jndiArea.text, names)
+			}
+		}
+
 		val okBtn = Button("Сохранить").apply {
 			isDefaultButton = true
 			setOnAction {
@@ -131,6 +181,7 @@ object ConnectorSettingsDialog {
 					javaExecutablePath = javaExecField.text.trim(),
 					classpathEntries = classpathArea.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList(),
 					vmOptions = vmOptionsField.text.trim(),
+					jndiDataSources = jndiArea.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList(),
 				)
 				dlg.close()
 			}
@@ -152,13 +203,16 @@ object ConnectorSettingsDialog {
 			Label("Classpath (jar-файлы и/или папки с коннектором — как у crif-runner's classpath.entries):"),
 			classpathArea,
 			HBox(8.0, addJarBtn, addFolderBtn),
+			Label("Заглушки JNDI DataSource (реальный java:/… JNDI вне сервера недоступен):"),
+			jndiArea,
+			HBox(8.0, findJndiNamesBtn, importDatasourcesBtn),
 			HBox(8.0, okBtn, cancelBtn).apply { alignment = Pos.CENTER_RIGHT },
 		).apply {
 			padding = Insets(12.0)
 			VBox.setVgrow(classpathArea, Priority.ALWAYS)
 		}
 
-		dlg.scene = Scene(root, 620.0, 520.0)
+		dlg.scene = Scene(root, 640.0, 600.0)
 		dlg.showAndWait()
 		return result
 	}
@@ -174,5 +228,28 @@ object ConnectorSettingsDialog {
 			if (index >= 0) tokens[index] = token else tokens.add(token)
 		}
 		return tokens.joinToString(" ")
+	}
+
+
+	/** Добавляет/заменяет строки `jndiName=...` по ключу [jndiName], не трогая остальные. */
+	private fun mergeJndiLines(existing: String, newLines: List<Pair<String, String>>): String {
+		val lines = existing.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
+		for ((jndiName, line) in newLines) {
+			val prefix = "$jndiName="
+			val index = lines.indexOfFirst { it.startsWith(prefix) }
+			if (index >= 0) lines[index] = line else lines.add(line)
+		}
+		return lines.joinToString("\n")
+	}
+
+
+	/** Дописывает [names] пустыми строками `name=,,,`, не трогая уже существующие (пустые или заполненные). */
+	private fun addMissingJndiNames(existing: String, names: List<String>): String {
+		val lines = existing.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
+		val existingNames = lines.map { it.substringBefore("=") }.toSet()
+		for (name in names) {
+			if (name !in existingNames) lines.add("$name=,,,")
+		}
+		return lines.joinToString("\n")
 	}
 }

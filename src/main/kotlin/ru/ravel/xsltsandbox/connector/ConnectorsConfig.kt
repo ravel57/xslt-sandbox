@@ -11,6 +11,9 @@ package ru.ravel.xsltsandbox.connector
  * @param vmOptions доп. опции JVM процесса crif-runner (`-Dxxx=yyy`, `-Xmx...` и т.п.), через пробел/перенос строки
  * @param connectorProps свойства (`connProps`), передаваемые коннектору в execute(...); изначально могут
  *   прийти из аргумента запуска `--input-connector-props-path`, затем редактируются и сохраняются здесь же
+ * @param jndiDataSources подмены реальных JNDI DataSource (`java:/...` вне сервера недоступны): строки вида
+ *   `jndiName=driverClassName,jdbcUrl,username,password`, по одной на строку — crif-runner поднимает по ним
+ *   заглушечный InitialContext с настоящими JDBC-подключениями (см. jndi.dataSources в runner-java7)
  *
  * Имя Java-класса коннектора сюда не входит — оно не настройка приложения, а параметр конкретного
  * прогона: передаётся аргументом запуска sandbox `--input-connector-class-name`.
@@ -25,4 +28,5 @@ data class ConnectorsConfig(
 	val classpathEntries: List<String> = emptyList(),
 	val vmOptions: String = "",
 	val connectorProps: Map<String, String> = emptyMap(),
+	val jndiDataSources: List<String> = emptyList(),
 )
